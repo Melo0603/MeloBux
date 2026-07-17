@@ -17,11 +17,6 @@ import {
   type Firestore
 } from "firebase/firestore";
 import {
-  connectFunctionsEmulator,
-  getFunctions,
-  type Functions
-} from "firebase/functions";
-import {
   connectStorageEmulator,
   getStorage,
   type FirebaseStorage
@@ -48,7 +43,6 @@ const requiredConfig = [
 ];
 
 export const isFirebaseConfigured = requiredConfig.every(Boolean);
-export const functionsRegion = import.meta.env.VITE_FUNCTIONS_REGION || "southamerica-east1";
 
 let app: FirebaseApp | null = null;
 let appCheck: AppCheck | null = null;
@@ -58,7 +52,6 @@ let messagingPromise: Promise<Messaging | null> = Promise.resolve(null);
 export let auth: Auth | null = null;
 export let db: Firestore | null = null;
 export let storage: FirebaseStorage | null = null;
-export let functions: Functions | null = null;
 
 type AppCheckDebugGlobal = typeof globalThis & {
   FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean | string;
@@ -82,7 +75,6 @@ if (isFirebaseConfigured) {
   auth = getAuth(app);
   db = getFirestore(app);
   storage = getStorage(app);
-  functions = getFunctions(app, functionsRegion);
 
   const appCheckSiteKey = import.meta.env.VITE_FIREBASE_APP_CHECK_SITE_KEY;
   if (import.meta.env.DEV) {
@@ -117,7 +109,6 @@ if (isFirebaseConfigured) {
       connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
       connectFirestoreEmulator(db, "127.0.0.1", 8080);
       connectStorageEmulator(storage, "127.0.0.1", 9199);
-      connectFunctionsEmulator(functions, "127.0.0.1", 5001);
       emulatorState.__FIREBASE_EMULATORS_CONNECTED__ = true;
     }
   }

@@ -9,10 +9,9 @@ import {
   limit,
   type DocumentData
 } from "firebase/firestore";
-import { httpsCallable } from "firebase/functions";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { getToken } from "firebase/messaging";
-import { appCheck, auth, db, functions, isFirebaseConfigured, messagingPromise, storage } from "../lib/firebase";
+import { auth, db, isFirebaseConfigured, messagingPromise, storage } from "../lib/firebase";
 import {
   fallbackBanners,
   fallbackCategories,
@@ -64,7 +63,7 @@ function sortByOrder<T extends { sortOrder?: number; name?: string; question?: s
 }
 
 function requestInitialCatalog() {
-  if (!isFirebaseConfigured || !functions || initialCatalogRequested) return;
+  if (!isFirebaseConfigured || initialCatalogRequested) return;
   initialCatalogRequested = true;
   void ensureInitialCatalog().catch(() => {
     initialCatalogRequested = false;
@@ -528,30 +527,61 @@ export function subscribeAuditLogs(onValue: Listener<AuditLog[]>) {
   });
 }
 
-function callable<TRequest, TResponse>(name: string) {
-  if (!functions) {
-    throw new Error("Firebase não está configurado.");
-  }
-
-  return httpsCallable<TRequest, TResponse>(functions, name);
-}
-
 function requireAuthenticatedUser(message = "Faca login para continuar.") {
   if (!auth) throw new Error("Firebase Authentication nao esta configurado.");
   if (!auth.currentUser) throw new Error(message);
   return auth.currentUser;
 }
 
-function canCallProtectedFunctions() {
-  return import.meta.env.VITE_USE_FIREBASE_EMULATORS === "true" || Boolean(appCheck);
+function netlifyFunctionsBaseUrl() {
+  return (import.meta.env.VITE_NETLIFY_FUNCTIONS_BASE_URL || "").replace(/\/$/, "");
 }
 
-function requireProtectedFunctionsReady() {
-  if (!canCallProtectedFunctions()) {
-    throw new Error(
-      "Firebase App Check nao esta configurado. Preencha VITE_FIREBASE_APP_CHECK_SITE_KEY para usar o checkout."
-    );
+async function netlifyRequest<TRequest, TResponse>(
+  endpoint: "admin" | "checkout",
+  payload: TRequest,
+  options: { authRequired?: boolean } = {}
+): Promise<{ data: TResponse }> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json"
+  };
+  const user = auth?.currentUser ?? null;
+
+  if (options.authRequired !== false) {
+    if (!user) throw new Error("Faca login para continuar.");
+    headers.Authorization = `Bearer ${await user.getIdToken()}`;
+  } else if (user) {
+    headers.Authorization = `Bearer ${await user.getIdToken()}`;
   }
+
+  const response = await fetch(`${netlifyFunctionsBaseUrl()}/.netlify/functions/${endpoint}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload)
+  });
+  const body = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const message =
+      typeof body?.error?.message === "string"
+        ? body.error.message
+        : "Erro ao chamar backend.";
+    throw new Error(message);
+  }
+
+  return body as { data: TResponse };
+}
+
+function adminAction<TRequest, TResponse>(
+  action: string,
+  data: TRequest,
+  options?: { authRequired?: boolean }
+) {
+  return netlifyRequest<{ action: string; data: TRequest }, TResponse>(
+    "admin",
+    { action, data },
+    options
+  );
 }
 
 async function compressImage(file: File, maxSize = 1400, quality = 0.82) {
@@ -576,18 +606,22 @@ async function compressImage(file: File, maxSize = 1400, quality = 0.82) {
 }
 
 export async function grantInitialAdmin() {
-  return callable<void, { ok: boolean; refreshToken?: boolean }>("grantInitialAdmin")();
+  return adminAction<void, { ok: boolean; refreshToken?: boolean }>("grantInitialAdmin", undefined);
 }
 
 export async function seedDefaultCatalog() {
-  return callable<void, { ok: boolean }>("seedDefaultCatalog")();
+  return adminAction<void, { ok: boolean }>("seedDefaultCatalog", undefined);
 }
 
 export async function ensureInitialCatalog() {
-  if (!isFirebaseConfigured || !functions || !canCallProtectedFunctions()) {
+  if (!isFirebaseConfigured) {
     return { data: { ok: true, created: 0 } };
   }
-  return callable<void, { ok: boolean; created: number }>("ensureInitialCatalog")();
+  return adminAction<void, { ok: boolean; created: number }>(
+    "ensureInitialCatalog",
+    undefined,
+    { authRequired: false }
+  );
 }
 
 export async function saveAdminDocument<T extends Record<string, unknown>>(payload: {
@@ -595,14 +629,14 @@ export async function saveAdminDocument<T extends Record<string, unknown>>(paylo
   id: string;
   data: T;
 }) {
-  return callable<typeof payload, { ok: boolean }>("saveAdminDocument")(payload);
+  return adminAction<typeof payload, { ok: boolean }>("saveAdminDocument", payload);
 }
 
 export async function deleteAdminDocument(payload: {
   collection: AdminCollectionName;
   id: string;
 }) {
-  return callable<typeof payload, { ok: boolean }>("deleteAdminDocument")(payload);
+  return adminAction<typeof payload, { ok: boolean }>("deleteAdminDocument", payload);
 }
 
 export async function duplicateAdminDocument(payload: {
@@ -610,7 +644,7 @@ export async function duplicateAdminDocument(payload: {
   id: string;
   newId: string;
 }) {
-  return callable<typeof payload, { ok: boolean; id: string }>("duplicateAdminDocument")(payload);
+  return adminAction<typeof payload, { ok: boolean; id: string }>("duplicateAdminDocument", payload);
 }
 
 export async function updateUserProfile(payload: {
@@ -619,7 +653,7 @@ export async function updateUserProfile(payload: {
   robloxUsername?: string;
   soundEnabled?: boolean;
 }) {
-  return callable<typeof payload, { ok: boolean }>("updateUserProfile")(payload);
+  return adminAction<typeof payload, { ok: boolean }>("updateUserProfile", payload);
 }
 
 export async function ensureAnonymousSession() {
@@ -627,8 +661,12 @@ export async function ensureAnonymousSession() {
 }
 
 export async function trackProductView(productId: string) {
-  if (!isFirebaseConfigured || !canCallProtectedFunctions()) return { data: { ok: true } };
-  return callable<{ productId: string }, { ok: boolean }>("trackProductView")({ productId });
+  if (!isFirebaseConfigured) return { data: { ok: true } };
+  return adminAction<{ productId: string }, { ok: boolean }>(
+    "trackProductView",
+    { productId },
+    { authRequired: false }
+  );
 }
 
 export async function sendChatMessage(payload: {
@@ -636,19 +674,19 @@ export async function sendChatMessage(payload: {
   text: string;
   imageUrl?: string;
 }) {
-  return callable<typeof payload, { ok: boolean; messageId: string }>("sendChatMessage")(payload);
+  return adminAction<typeof payload, { ok: boolean; messageId: string }>("sendChatMessage", payload);
 }
 
 export async function markChatRead(conversationId?: string) {
-  return callable<{ conversationId?: string }, { ok: boolean }>("markChatRead")({ conversationId });
+  return adminAction<{ conversationId?: string }, { ok: boolean }>("markChatRead", { conversationId });
 }
 
 export async function setChatTyping(payload: { conversationId?: string; typing: boolean }) {
-  return callable<typeof payload, { ok: boolean }>("setChatTyping")(payload);
+  return adminAction<typeof payload, { ok: boolean }>("setChatTyping", payload);
 }
 
 export async function updateOrderStatus(payload: { orderId: string; status: string }) {
-  return callable<typeof payload, { ok: boolean }>("updateOrderStatus")(payload);
+  return adminAction<typeof payload, { ok: boolean }>("updateOrderStatus", payload);
 }
 
 export async function createOrderReview(payload: {
@@ -656,13 +694,11 @@ export async function createOrderReview(payload: {
   rating: number;
   text: string;
 }) {
-  return callable<typeof payload, { ok: boolean; reviewId: string }>("createOrderReview")(payload);
+  return adminAction<typeof payload, { ok: boolean; reviewId: string }>("createOrderReview", payload);
 }
 
 export async function markNotificationRead(notificationId: string) {
-  return callable<{ notificationId: string }, { ok: boolean }>("markNotificationRead")({
-    notificationId
-  });
+  return adminAction<{ notificationId: string }, { ok: boolean }>("markNotificationRead", { notificationId });
 }
 
 export async function createCheckoutPreference(payload: {
@@ -672,11 +708,8 @@ export async function createCheckoutPreference(payload: {
 }) {
   if (!auth) throw new Error("Firebase Authentication não está configurado.");
   requireAuthenticatedUser("Faca login para comprar.");
-  requireProtectedFunctionsReady();
 
-  return callable<typeof payload, { orderId: string; initPoint: string }>(
-    "createCheckoutPreference"
-  )(payload);
+  return netlifyRequest<typeof payload, { orderId: string; initPoint: string }>("checkout", payload);
 }
 
 export async function uploadAdminImage(file: File, path: string) {
@@ -715,7 +748,7 @@ export async function enableWebNotifications() {
     serviceWorkerRegistration: registration
   });
 
-  await callable<{ token: string; userAgent: string }, { ok: boolean }>("registerFcmToken")({
+  await adminAction<{ token: string; userAgent: string }, { ok: boolean }>("registerFcmToken", {
     token,
     userAgent: navigator.userAgent
   });

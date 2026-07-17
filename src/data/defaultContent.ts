@@ -8,7 +8,7 @@ import type {
   StorePopup,
   StoreSettings,
   UserProfile
-} from "../types";
+} from "../types.js";
 
 const ownerUserId = "3962515182";
 const ownerAvatar = "/assets/melo-hero-cutout.png";
@@ -76,6 +76,26 @@ export const fallbackCategories: Category[] = [
 ];
 
 export const fallbackProducts: Product[] = [
+  // TEMPORÁRIO PARA TESTES
+  {
+    id: "gamepass-pix-teste",
+    categorySlug: "gamepass",
+    name: "PIX Teste (R$ 0,01)",
+    quantity: 1,
+    price: 0.01,
+    stock: 999,
+    status: "active",
+    sortOrder: 5,
+    description: "Produto temporario para validar PIX, checkout Mercado Pago e webhook.",
+    deliveryTime: "Teste de integracao",
+    guarantees: [],
+    paymentMethods: ["Pix"],
+    faqIds: [],
+    imageUrl: gamepassImage,
+    gallery: [gamepassImage],
+    soldCount: 0,
+    visitCount: 0
+  },
   ...robuxPackages.map((item, index) => ({
     id: `gamepass-${item.quantity}`,
     categorySlug: "gamepass",

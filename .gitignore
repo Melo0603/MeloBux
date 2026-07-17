@@ -1,8 +1,6 @@
 node_modules/
 dist/
 .vite/
-functions/lib/
-functions/node_modules/
 .env
 .env.*
 !.env.example
@@ -13,3 +11,6 @@ firestore-debug.log
 ui-debug.log
 *.local
 *.tsbuildinfo
+
+# Local Netlify folder
+.netlify
