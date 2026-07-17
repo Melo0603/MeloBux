@@ -78,6 +78,15 @@ export function AdminOrders({ orders }: { orders: Order[] }) {
                 ))}
               </select>
             </label>
+            {order.status !== "delivered" ? (
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => updateOrderStatus({ orderId: order.id, status: "delivered" })}
+              >
+                Marcar como entregue
+              </button>
+            ) : null}
           </article>
         ))}
       </div>

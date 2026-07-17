@@ -538,7 +538,7 @@ function netlifyFunctionsBaseUrl() {
 }
 
 async function netlifyRequest<TRequest, TResponse>(
-  endpoint: "admin" | "checkout",
+  endpoint: "admin" | "auth" | "checkout",
   payload: TRequest,
   options: { authRequired?: boolean } = {}
 ): Promise<{ data: TResponse }> {
@@ -570,6 +570,14 @@ async function netlifyRequest<TRequest, TResponse>(
   }
 
   return body as { data: TResponse };
+}
+
+function authAction<TRequest, TResponse>(action: string, data: TRequest) {
+  return netlifyRequest<{ action: string; data: TRequest }, TResponse>(
+    "auth",
+    { action, data },
+    { authRequired: false }
+  );
 }
 
 function adminAction<TRequest, TResponse>(
@@ -607,6 +615,28 @@ async function compressImage(file: File, maxSize = 1400, quality = 0.82) {
 
 export async function grantInitialAdmin() {
   return adminAction<void, { ok: boolean; refreshToken?: boolean }>("grantInitialAdmin", undefined);
+}
+
+export async function requestAuthCode(payload: {
+  email: string;
+  purpose: "login" | "password_reset";
+}) {
+  return authAction<typeof payload, { ok: boolean }>("requestAuthCode", payload);
+}
+
+export async function verifyAuthCode(payload: {
+  email: string;
+  code: string;
+}) {
+  return authAction<typeof payload, { ok: boolean; customToken: string }>("verifyAuthCode", payload);
+}
+
+export async function resetPasswordWithCode(payload: {
+  email: string;
+  code: string;
+  password: string;
+}) {
+  return authAction<typeof payload, { ok: boolean; customToken: string }>("resetPasswordWithCode", payload);
 }
 
 export async function seedDefaultCatalog() {

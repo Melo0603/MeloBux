@@ -34,6 +34,7 @@ import {
 } from "../hooks/useStoreContent";
 import { arrayToLines, linesToArray, toSlug } from "../lib/format";
 import { auth } from "../lib/firebase";
+import { ADMIN_EMAIL, isAllowedAdminEmail } from "../lib/admin";
 import {
   deleteAdminDocument,
   duplicateAdminDocument,
@@ -169,6 +170,7 @@ function NeedsAdminClaim() {
     <div className="content-shell">
       <EmptyState>
         <h1>Acesso administrativo pendente</h1>
+        <p>Use o e-mail {ADMIN_EMAIL} para ativar o painel.</p>
         <button type="button" className="primary-button" onClick={bootstrap}>
           <ShieldCheck size={18} aria-hidden />
           Ativar admin inicial
@@ -181,6 +183,22 @@ function NeedsAdminClaim() {
 
 export function AdminPage() {
   const { isAdmin, loading, logout, user } = useAuthUser();
+
+  if (loading) return <main className="content-shell"><EmptyState>Carregando painel.</EmptyState></main>;
+  if (!user) return <main className="content-shell"><EmptyState>Redirecionando para login.</EmptyState></main>;
+  if (!isAllowedAdminEmail(user.email)) {
+    return (
+      <main className="content-shell">
+        <EmptyState>Este painel e exclusivo para {ADMIN_EMAIL}.</EmptyState>
+      </main>
+    );
+  }
+  if (!isAdmin) return <NeedsAdminClaim />;
+
+  return <AdminWorkspace logout={logout} />;
+}
+
+function AdminWorkspace({ logout }: { logout: () => Promise<void> }) {
   const [activeTab, setActiveTab] = useState<AdminTab>("dashboard");
   const categories = useCategories(true);
   const products = useProducts(null, true);
@@ -197,10 +215,6 @@ export function AdminPage() {
 
   useEffect(() => subscribeCoupons(setCoupons), []);
   useEffect(() => subscribeOrders(setOrders), []);
-
-  if (loading) return <main className="content-shell"><EmptyState>Carregando painel.</EmptyState></main>;
-  if (!user) return <main className="content-shell"><EmptyState>Redirecionando para login.</EmptyState></main>;
-  if (!isAdmin) return <NeedsAdminClaim />;
 
   async function runAction(action: () => Promise<unknown>, success: string) {
     setMessage("");

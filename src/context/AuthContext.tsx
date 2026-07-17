@@ -2,15 +2,19 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   browserLocalPersistence,
   createUserWithEmailAndPassword,
+  getRedirectResult,
   onIdTokenChanged,
   setPersistence,
+  signInWithCustomToken,
   signInWithEmailAndPassword,
   signInWithPopup,
+  signInWithRedirect,
   signOut,
   updateProfile,
   type User
 } from "firebase/auth";
 import { auth, googleProvider } from "../lib/firebase";
+import { isAllowedAdminEmail } from "../lib/admin";
 import { AuthContext, type AuthContextValue } from "./AuthContextCore";
 
 function getAuthInstance() {
@@ -39,9 +43,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     let active = true;
     void setPersistence(auth, browserLocalPersistence).catch(() => undefined);
+    void getRedirectResult(auth)
+      .then((result) => {
+        if (result?.user) {
+          console.info("[MeloBux Auth] Google redirect completed", {
+            uid: result.user.uid,
+            email: result.user.email
+          });
+        }
+      })
+      .catch((error: unknown) => {
+        console.error("[MeloBux Auth] Google redirect failed", error);
+      });
 
     const unsubscribe = onIdTokenChanged(auth, async (currentUser) => {
       if (!active) return;
+      console.info("[MeloBux Auth] ID token changed", {
+        uid: currentUser?.uid ?? null,
+        email: currentUser?.email ?? null
+      });
       setUser(currentUser);
       try {
         setClaims(currentUser ? (await currentUser.getIdTokenResult()).claims : {});
@@ -61,13 +81,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AuthContextValue>(() => {
     async function loginWithGoogle() {
       const authInstance = await keepSessionLocal();
-      const credential = await signInWithPopup(authInstance, googleProvider);
-      return credential.user;
+      console.info("[MeloBux Auth] Google popup start", {
+        currentUser: authInstance.currentUser?.uid ?? null
+      });
+      try {
+        const credential = await signInWithPopup(authInstance, googleProvider);
+        console.info("[MeloBux Auth] Google popup success", {
+          uid: credential.user.uid,
+          email: credential.user.email
+        });
+        return credential.user;
+      } catch (error) {
+        const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
+        console.error("[MeloBux Auth] Google popup failed", error);
+        if (
+          code.includes("auth/popup-closed-by-user") ||
+          code.includes("auth/popup-blocked") ||
+          code.includes("auth/cancelled-popup-request")
+        ) {
+          console.info("[MeloBux Auth] Falling back to Google redirect");
+          await signInWithRedirect(authInstance, googleProvider);
+          return null;
+        }
+        throw error;
+      }
     }
 
     async function loginWithEmail(email: string, password: string) {
       const authInstance = await keepSessionLocal();
       const credential = await signInWithEmailAndPassword(authInstance, email, password);
+      return credential.user;
+    }
+
+    async function loginWithCustomToken(token: string) {
+      const authInstance = await keepSessionLocal();
+      const credential = await signInWithCustomToken(authInstance, token);
       return credential.user;
     }
 
@@ -94,9 +142,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       claims,
       loading,
       isAuthenticated,
-      isAdmin: isAuthenticated && claims.admin === true,
+      isAdmin: isAuthenticated && claims.admin === true && isAllowedAdminEmail(user?.email),
       loginWithGoogle,
       loginWithEmail,
+      loginWithCustomToken,
       registerWithEmail,
       logout
     };

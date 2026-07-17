@@ -2,6 +2,7 @@ import { lazy, StrictMode, Suspense, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom";
 import { App } from "./App";
+import { PageSkeleton } from "./components/LoadingState";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { AuthProvider } from "./context/AuthContext";
 import { CartProvider } from "./context/CartContext";
@@ -15,9 +16,10 @@ const HomePage = lazy(() => import("./pages/HomePage").then((module) => ({ defau
 const LoginPage = lazy(() => import("./pages/LoginPage").then((module) => ({ default: module.LoginPage })));
 const OrderPage = lazy(() => import("./pages/OrderPage").then((module) => ({ default: module.OrderPage })));
 const ProductPage = lazy(() => import("./pages/ProductPage").then((module) => ({ default: module.ProductPage })));
+const PurchasesPage = lazy(() => import("./pages/PurchasesPage").then((module) => ({ default: module.PurchasesPage })));
 
 function lazyPage(element: ReactNode) {
-  return <Suspense fallback={<main className="content-shell">Carregando...</main>}>{element}</Suspense>;
+  return <Suspense fallback={<PageSkeleton />}>{element}</Suspense>;
 }
 
 const router = createBrowserRouter([
@@ -33,6 +35,7 @@ const router = createBrowserRouter([
       { path: "cupons", element: <Navigate to="/#cupons" replace /> },
       { path: "avaliacoes", element: <Navigate to="/#avaliacoes" replace /> },
       { path: "pedido/:orderId", element: lazyPage(<OrderPage />) },
+      { path: "compras", element: <ProtectedRoute>{lazyPage(<PurchasesPage />)}</ProtectedRoute> },
       { path: "login", element: lazyPage(<LoginPage />) },
       {
         path: "admin",

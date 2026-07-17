@@ -113,6 +113,8 @@ export interface Order {
   updatedAt?: unknown;
   deliveredAt?: unknown;
   cancelledAt?: unknown;
+  checkoutUrl?: string;
+  paidAt?: unknown;
 }
 
 export interface CartItem {
@@ -154,8 +156,14 @@ export interface ChatConversation {
   userId: string;
   userName: string;
   userPhotoUrl: string;
+  adminEmail?: string;
+  locked?: boolean;
   lastMessage: string;
   lastMessageAt?: unknown;
+  messageCount?: number;
+  orderId?: string;
+  orderStatus?: string;
+  productName?: string;
   unreadAdminCount: number;
   unreadUserCount: number;
   userOnline: boolean;
@@ -189,6 +197,7 @@ export interface StoreNotification {
     | "system";
   sound: boolean;
   read: boolean;
+  link?: string;
   createdAt?: unknown;
 }
 

@@ -7,8 +7,9 @@ export interface AuthContextValue {
   loading: boolean;
   isAuthenticated: boolean;
   isAdmin: boolean;
-  loginWithGoogle: () => Promise<User>;
+  loginWithGoogle: () => Promise<User | null>;
   loginWithEmail: (email: string, password: string) => Promise<User>;
+  loginWithCustomToken: (token: string) => Promise<User>;
   registerWithEmail: (email: string, password: string, displayName?: string) => Promise<User>;
   logout: () => Promise<void>;
 }

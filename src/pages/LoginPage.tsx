@@ -1,10 +1,11 @@
-import { LogIn, Mail, UserPlus } from "lucide-react";
+import { KeyRound, LogIn, Mail, RotateCcw, UserPlus } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuthUser } from "../hooks/useAuthUser";
 import { isFirebaseConfigured } from "../lib/firebase";
+import { requestAuthCode, resetPasswordWithCode, verifyAuthCode } from "../services/catalog";
 
-type LoginMode = "login" | "register";
+type LoginMode = "login" | "register" | "code" | "forgot";
 
 function getAuthErrorMessage(error: unknown) {
   const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
@@ -19,11 +20,20 @@ function getAuthErrorMessage(error: unknown) {
 }
 
 export function LoginPage() {
-  const { isAuthenticated, loading, loginWithEmail, loginWithGoogle, registerWithEmail } = useAuthUser();
+  const {
+    isAuthenticated,
+    loading,
+    loginWithCustomToken,
+    loginWithEmail,
+    loginWithGoogle,
+    registerWithEmail
+  } = useAuthUser();
   const [mode, setMode] = useState<LoginMode>("login");
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [codeSent, setCodeSent] = useState(false);
   const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const location = useLocation();
@@ -50,6 +60,28 @@ export function LoginPage() {
     try {
       if (mode === "register") {
         await registerWithEmail(email.trim(), password, displayName);
+      } else if (mode === "code") {
+        if (!codeSent) {
+          await requestAuthCode({ email: email.trim(), purpose: "login" });
+          setCodeSent(true);
+          setMessage("Enviamos um codigo para seu e-mail.");
+          return;
+        }
+        const response = await verifyAuthCode({ email: email.trim(), code: code.trim() });
+        await loginWithCustomToken(response.data.customToken);
+      } else if (mode === "forgot") {
+        if (!codeSent) {
+          await requestAuthCode({ email: email.trim(), purpose: "password_reset" });
+          setCodeSent(true);
+          setMessage("Se este e-mail existir, enviamos um codigo de recuperacao.");
+          return;
+        }
+        const response = await resetPasswordWithCode({
+          email: email.trim(),
+          code: code.trim(),
+          password
+        });
+        await loginWithCustomToken(response.data.customToken);
       } else {
         await loginWithEmail(email.trim(), password);
       }
@@ -65,8 +97,8 @@ export function LoginPage() {
     setSubmitting(true);
     setMessage("");
     try {
-      await loginWithGoogle();
-      navigate(redirectTo, { replace: true });
+      const loggedUser = await loginWithGoogle();
+      if (loggedUser) navigate(redirectTo, { replace: true });
     } catch (error) {
       setMessage(getAuthErrorMessage(error));
     } finally {
@@ -74,16 +106,33 @@ export function LoginPage() {
     }
   }
 
+  function switchMode(nextMode: LoginMode) {
+    setMode(nextMode);
+    setMessage("");
+    setCode("");
+    setCodeSent(false);
+  }
+
+  const title =
+    mode === "register"
+      ? "Criar conta"
+      : mode === "code"
+        ? "Entrar com codigo"
+        : mode === "forgot"
+          ? "Recuperar senha"
+          : "Entrar";
+  const Icon = mode === "register" ? UserPlus : mode === "code" ? KeyRound : mode === "forgot" ? RotateCcw : LogIn;
+
   return (
     <main className="login-page">
       <section className="login-card" aria-labelledby="login-title">
         <div className="login-card-heading">
           <span className="login-icon" aria-hidden>
-            {mode === "login" ? <LogIn size={22} /> : <UserPlus size={22} />}
+            <Icon size={22} />
           </span>
           <div>
             <p>MeloBux</p>
-            <h1 id="login-title">{mode === "login" ? "Entrar" : "Criar conta"}</h1>
+            <h1 id="login-title">{title}</h1>
           </div>
         </div>
 
@@ -118,22 +167,49 @@ export function LoginPage() {
             />
           </label>
 
-          <label className="field">
-            Senha
-            <input
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              type="password"
-              autoComplete={mode === "register" ? "new-password" : "current-password"}
-              minLength={6}
-              required
-              disabled={submitting}
-            />
-          </label>
+          {mode === "code" || mode === "forgot" ? (
+            codeSent ? (
+              <label className="field">
+                Codigo recebido
+                <input
+                  value={code}
+                  onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                  inputMode="numeric"
+                  minLength={6}
+                  maxLength={6}
+                  required
+                  disabled={submitting}
+                />
+              </label>
+            ) : null
+          ) : null}
+
+          {mode !== "code" ? (
+            <label className="field">
+              {mode === "forgot" ? "Nova senha" : "Senha"}
+              <input
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                type="password"
+                autoComplete={mode === "register" || mode === "forgot" ? "new-password" : "current-password"}
+                minLength={6}
+                required
+                disabled={submitting || (mode === "forgot" && !codeSent)}
+              />
+            </label>
+          ) : null}
 
           <button type="submit" className="primary-button" disabled={submitting}>
-            {mode === "login" ? <LogIn size={18} aria-hidden /> : <UserPlus size={18} aria-hidden />}
-            {mode === "login" ? "Entrar" : "Cadastrar"}
+            <Icon size={18} aria-hidden />
+            {mode === "code" && !codeSent
+              ? "Enviar codigo"
+              : mode === "forgot" && !codeSent
+                ? "Enviar codigo"
+                : mode === "register"
+                  ? "Cadastrar"
+                  : mode === "forgot"
+                    ? "Alterar senha"
+                    : "Entrar"}
           </button>
         </form>
 
@@ -151,12 +227,23 @@ export function LoginPage() {
           type="button"
           className="text-button"
           onClick={() => {
-            setMode(mode === "login" ? "register" : "login");
-            setMessage("");
+            switchMode(mode === "login" ? "register" : "login");
           }}
         >
           {mode === "login" ? "Criar conta por e-mail" : "Ja tenho conta"}
         </button>
+
+        {mode !== "code" ? (
+          <button type="button" className="text-button" onClick={() => switchMode("code")}>
+            Entrar com codigo
+          </button>
+        ) : null}
+
+        {mode !== "forgot" ? (
+          <button type="button" className="text-button" onClick={() => switchMode("forgot")}>
+            Esqueci minha senha
+          </button>
+        ) : null}
 
         {message ? <p className="form-message">{message}</p> : null}
 

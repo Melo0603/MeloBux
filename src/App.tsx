@@ -2,11 +2,13 @@ import { Link, Outlet } from "react-router-dom";
 import { Header } from "./components/Header";
 import { StorePopupHost } from "./components/StorePopupHost";
 import { useCartContext } from "./context/CartContext";
+import { useAuthUser } from "./hooks/useAuthUser";
 import { useSettings } from "./hooks/useStoreContent";
 
 export function App() {
   const settings = useSettings();
   const cart = useCartContext();
+  const { isAuthenticated } = useAuthUser();
   const tiktokUrl = settings.tiktokUrl || "https://www.tiktok.com/@carloss0603";
 
   return (
@@ -22,13 +24,14 @@ export function App() {
             <span>{settings.notice}</span>
           </div>
         </div>
-        <nav aria-label="Rodapé">
-          <Link to="/">Início</Link>
+        <nav aria-label="Rodape">
+          <Link to="/">Inicio</Link>
           <Link to="/categoria/gamepass">Gamepass</Link>
           <Link to="/categoria/robux-na-conta">Robux na Conta</Link>
           <Link to="/#cupons">Cupons</Link>
-          <Link to="/#avaliacoes">Avaliações</Link>
+          <Link to="/#avaliacoes">Avaliacoes</Link>
           <Link to="/carrinho">Carrinho</Link>
+          {isAuthenticated ? <Link to="/compras">Suas compras</Link> : null}
           <a href={tiktokUrl} target="_blank" rel="noreferrer">
             TikTok
           </a>

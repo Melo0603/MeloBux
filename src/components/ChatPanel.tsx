@@ -11,7 +11,7 @@ import {
 } from "../services/catalog";
 import type { ChatConversation } from "../types";
 
-const emojis = ["🙂", "🔥", "✅", "💬", "🎮"];
+const emojis = [":)", "<3", "ok", "gg", "pix"];
 
 interface ChatPanelProps {
   conversationId?: string;
@@ -45,7 +45,8 @@ export function ChatPanel({ conversationId, conversation, adminMode = false, ini
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const previousMessageCount = useRef(0);
   const appliedInitialText = useRef("");
-  const canSend = Boolean(user?.uid && activeConversationId);
+  const readOnly = conversation?.locked === true;
+  const canSend = Boolean(user?.uid && activeConversationId && !readOnly);
 
   useEffect(() => {
     if (initialText && appliedInitialText.current !== initialText) {
@@ -87,7 +88,7 @@ export function ChatPanel({ conversationId, conversation, adminMode = false, ini
     setError("");
     try {
       await sendChatMessage({
-        conversationId: adminMode ? activeConversationId : undefined,
+        conversationId: activeConversationId,
         text: text.trim()
       });
       setText("");
@@ -100,13 +101,13 @@ export function ChatPanel({ conversationId, conversation, adminMode = false, ini
   }
 
   async function upload(file: File) {
-    if (!user?.uid || !activeConversationId) return;
+    if (!user?.uid || !activeConversationId || readOnly) return;
     setBusy(true);
     setError("");
     try {
       const url = await uploadUserImage(file, user.uid, "chat");
       await sendChatMessage({
-        conversationId: adminMode ? activeConversationId : undefined,
+        conversationId: activeConversationId,
         text: "",
         imageUrl: url
       });
@@ -117,12 +118,19 @@ export function ChatPanel({ conversationId, conversation, adminMode = false, ini
     }
   }
 
+  const customerInitial = (conversation?.userName || profile?.displayName || "C").slice(0, 1).toUpperCase();
+
   return (
     <section className="chat-panel" aria-label="Chat">
       <header>
+        {conversation?.userPhotoUrl ? <img className="chat-header-avatar" src={conversation.userPhotoUrl} alt="" /> : null}
         <div>
           <strong>{adminMode ? conversation?.userName || "Cliente" : "Atendimento MeloBux"}</strong>
-          <span>{conversation?.userOnline || !adminMode ? "Online" : "Offline"}</span>
+          <span>
+            {conversation?.productName ? `${conversation.productName} · ` : ""}
+            {conversation?.userOnline || !adminMode ? "Online" : "Offline"}
+            {messages.length ? ` · ${messages.length} mensagens` : ""}
+          </span>
         </div>
         {typingText ? <span className="typing">{typingText}</span> : null}
       </header>
@@ -132,16 +140,23 @@ export function ChatPanel({ conversationId, conversation, adminMode = false, ini
           const mine = message.senderId === user?.uid;
           return (
             <article key={message.id} className={mine ? "chat-message mine" : "chat-message"}>
-              {message.imageUrl ? <img src={message.imageUrl} alt="Imagem enviada no chat" /> : null}
-              {message.text ? <p>{message.text}</p> : null}
-              <span>
-                {formatDate(message.createdAt)} · {message.status === "read" ? "Lida" : "Recebida"}
+              <span className="message-avatar" aria-hidden>
+                {mine ? (profile?.displayName || user?.email || "C").slice(0, 1).toUpperCase() : customerInitial}
               </span>
+              <div>
+                {message.imageUrl ? <img src={message.imageUrl} alt="Imagem enviada no chat" /> : null}
+                {message.text ? <p>{message.text}</p> : null}
+                <span>
+                  {formatDate(message.createdAt)} · {message.status === "read" ? "Lida" : "Recebida"}
+                </span>
+              </div>
             </article>
           );
         })}
         <div ref={bottomRef} />
       </div>
+
+      {readOnly ? <p className="chat-locked">Pedido entregue. Esta conversa esta arquivada somente para leitura.</p> : null}
 
       <footer className="chat-composer">
         <button
@@ -149,6 +164,7 @@ export function ChatPanel({ conversationId, conversation, adminMode = false, ini
           className="icon-button"
           title="Emoji"
           onClick={() => setText((current) => `${current}${emojis[0]}`)}
+          disabled={readOnly}
         >
           <Smile size={18} aria-hidden />
         </button>
@@ -156,6 +172,7 @@ export function ChatPanel({ conversationId, conversation, adminMode = false, ini
           aria-label="Escolher emoji"
           value=""
           onChange={(event) => setText((current) => `${current}${event.target.value}`)}
+          disabled={readOnly}
         >
           <option value="">Emoji</option>
           {emojis.map((emoji) => (
@@ -166,23 +183,23 @@ export function ChatPanel({ conversationId, conversation, adminMode = false, ini
         </select>
         <label className="icon-button file-button" title="Enviar imagem">
           <ImagePlus size={18} aria-hidden />
-          <input type="file" accept="image/*" onChange={(event) => event.target.files?.[0] && upload(event.target.files[0])} />
+          <input disabled={readOnly} type="file" accept="image/*" onChange={(event) => event.target.files?.[0] && upload(event.target.files[0])} />
         </label>
         <input
           value={text}
           onChange={(event) => {
             setText(event.target.value);
-            if (activeConversationId) {
+            if (activeConversationId && !readOnly) {
               setChatTyping({ conversationId: activeConversationId, typing: true }).catch(() => undefined);
             }
           }}
           onKeyDown={(event) => {
             if (event.key === "Enter") submit();
           }}
-          placeholder={profile?.displayName ? `Mensagem como ${profile.displayName}` : "Digite sua mensagem"}
+          placeholder={readOnly ? "Conversa arquivada" : profile?.displayName ? `Mensagem como ${profile.displayName}` : "Digite sua mensagem"}
           disabled={!canSend || busy}
         />
-        <button type="button" className="primary-button" disabled={!text.trim() || busy} onClick={submit}>
+        <button type="button" className="primary-button" disabled={!text.trim() || busy || readOnly} onClick={submit}>
           <Send size={18} aria-hidden />
           Enviar
         </button>

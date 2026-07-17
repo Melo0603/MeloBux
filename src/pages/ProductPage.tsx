@@ -1,4 +1,4 @@
-import { CheckCircle2, CreditCard, PackageCheck, ShoppingCart, Ticket } from "lucide-react";
+import { CreditCard, PackageCheck, ShoppingCart, Ticket } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { EmptyState } from "../components/LoadingState";
@@ -115,10 +115,6 @@ export function ProductPage() {
             <span>
               <PackageCheck size={18} aria-hidden />
               {currentProduct.deliveryTime}
-            </span>
-            <span>
-              <CheckCircle2 size={18} aria-hidden />
-              Estoque: {currentProduct.stock}
             </span>
           </div>
 

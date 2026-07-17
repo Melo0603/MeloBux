@@ -1,5 +1,6 @@
 import { Bell, CheckCheck } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useAuthUser } from "../hooks/useAuthUser";
 import { useNotifications, useUserProfile } from "../hooks/useStoreContent";
 import { playNotificationSound } from "../lib/sound";
@@ -39,7 +40,7 @@ export function NotificationCenter() {
             notifications.slice(0, 8).map((item) => (
               <article key={item.id} className={item.read ? "notice-card read" : "notice-card"}>
                 <div>
-                  <strong>{item.title}</strong>
+                  {item.link ? <Link to={item.link}>{item.title}</Link> : <strong>{item.title}</strong>}
                   <p>{item.body}</p>
                   <span>{formatDate(item.createdAt)}</span>
                 </div>

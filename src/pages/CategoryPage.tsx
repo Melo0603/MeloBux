@@ -55,7 +55,7 @@ function ProductPicker({ products, onCustom }: { products: Product[]; onCustom: 
                 >
                   <span>
                     <strong>{formatRobux(product.quantity)} Robux</strong>
-                    <small>{product.stock} em estoque</small>
+                    <small>Entrega digital</small>
                   </span>
                   <b>{formatCurrency(product.price)}</b>
                 </Link>

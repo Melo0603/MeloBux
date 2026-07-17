@@ -1,9 +1,10 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomInt, timingSafeEqual } from "node:crypto";
 import type { HandlerEvent, HandlerResponse } from "@netlify/functions";
 import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getAuth, type DecodedIdToken } from "firebase-admin/auth";
 import { FieldValue, Timestamp, getFirestore } from "firebase-admin/firestore";
 import { getMessaging } from "firebase-admin/messaging";
+import nodemailer from "nodemailer";
 import {
   fallbackBanners,
   fallbackCategories,
@@ -55,6 +56,16 @@ const adminCollections = new Set<AdminCollection>([
   "settings",
   "popups"
 ]);
+
+const allowedAdminEmail = "carlosmelo0603n2@gmail.com";
+
+function normalizeEmail(value: unknown) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function isAllowedAdminEmail(value: unknown) {
+  return normalizeEmail(value) === allowedAdminEmail;
+}
 
 const orderStatuses = new Set([
   "pending_payment",
@@ -211,7 +222,7 @@ function assertAdmin(requestAuth: AuthContext | undefined) {
     throw new ApiError(401, "unauthenticated", "Faca login para continuar.");
   }
 
-  if (requestAuth.token.admin !== true) {
+  if (requestAuth.token.admin !== true || !isAllowedAdminEmail(requestAuth.token.email)) {
     throw new ApiError(403, "permission-denied", "Usuario sem permissao administrativa.");
   }
 }
@@ -573,6 +584,199 @@ async function enforceRateLimit(uid: string, key: string, max = 30, windowMs = 6
   });
 }
 
+type AuthCodePurpose = "login" | "password_reset";
+
+function authCodePurpose(value: unknown): AuthCodePurpose {
+  return value === "password_reset" ? "password_reset" : "login";
+}
+
+function requireEmail(value: unknown) {
+  const email = normalizeEmail(value);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new ApiError(400, "invalid-argument", "Informe um e-mail valido.");
+  }
+  return email;
+}
+
+function authCodeDocumentId(email: string, purpose: AuthCodePurpose) {
+  return createHash("sha256").update(`${purpose}:${email}`).digest("hex");
+}
+
+function authCodeSecret() {
+  return process.env.AUTH_CODE_SECRET || firebasePrivateKey();
+}
+
+function hashAuthCode(email: string, purpose: AuthCodePurpose, code: string) {
+  return createHmac("sha256", authCodeSecret()).update(`${purpose}:${email}:${code}`).digest("hex");
+}
+
+function safeCompare(value: string, expected: string) {
+  const valueBuffer = Buffer.from(value);
+  const expectedBuffer = Buffer.from(expected);
+  return valueBuffer.length === expectedBuffer.length && timingSafeEqual(valueBuffer, expectedBuffer);
+}
+
+function smtpTransporter() {
+  const host = process.env.SMTP_HOST;
+  const from = process.env.SMTP_FROM || process.env.SMTP_USER;
+  if (!host || !from) {
+    throw new ApiError(500, "failed-precondition", "SMTP nao configurado para envio de codigos.");
+  }
+
+  const port = Number(process.env.SMTP_PORT || 587);
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+
+  return {
+    from,
+    transporter: nodemailer.createTransport({
+      host,
+      port: Number.isFinite(port) ? port : 587,
+      secure: process.env.SMTP_SECURE === "true",
+      auth: user && pass ? { user, pass } : undefined
+    })
+  };
+}
+
+async function sendAuthCodeEmail(email: string, code: string, purpose: AuthCodePurpose) {
+  const { transporter, from } = smtpTransporter();
+  const subject = purpose === "password_reset" ? "Codigo para redefinir sua senha" : "Codigo de acesso MeloBux";
+  const intro =
+    purpose === "password_reset"
+      ? "Use este codigo para cadastrar uma nova senha na MeloBux."
+      : "Use este codigo para entrar na sua conta MeloBux.";
+  const text = `${intro}\n\nCodigo: ${code}\n\nEle expira em 10 minutos.`;
+
+  await transporter.sendMail({
+    from,
+    to: email,
+    subject,
+    text,
+    html: `<p>${intro}</p><p style="font-size:28px;font-weight:700;letter-spacing:6px">${code}</p><p>Ele expira em 10 minutos.</p>`
+  });
+}
+
+async function verifyStoredAuthCode(email: string, purpose: AuthCodePurpose, code: string) {
+  if (!/^\d{6}$/.test(code)) {
+    throw new ApiError(400, "invalid-argument", "Codigo invalido.");
+  }
+
+  const ref = db.collection("authCodes").doc(authCodeDocumentId(email, purpose));
+  const snapshot = await ref.get();
+  const data = snapshot.data();
+
+  if (!snapshot.exists || !data) {
+    throw new ApiError(400, "invalid-argument", "Codigo expirado ou invalido.");
+  }
+
+  const expiresAt = typeof data.expiresAt === "number" ? data.expiresAt : 0;
+  const attempts = typeof data.attempts === "number" ? data.attempts : 0;
+  const expectedHash = typeof data.codeHash === "string" ? data.codeHash : "";
+  const currentHash = hashAuthCode(email, purpose, code);
+
+  if (expiresAt < Date.now()) {
+    await ref.delete();
+    throw new ApiError(400, "invalid-argument", "Codigo expirado. Solicite outro.");
+  }
+
+  if (attempts >= 6) {
+    await ref.delete();
+    throw new ApiError(429, "resource-exhausted", "Muitas tentativas. Solicite outro codigo.");
+  }
+
+  if (!safeCompare(currentHash, expectedHash)) {
+    await ref.set(
+      {
+        attempts: FieldValue.increment(1),
+        updatedAt: FieldValue.serverTimestamp()
+      },
+      { merge: true }
+    );
+    throw new ApiError(400, "invalid-argument", "Codigo incorreto.");
+  }
+
+  await ref.delete();
+}
+
+async function getOrCreateAuthUser(email: string) {
+  try {
+    return await auth.getUserByEmail(email);
+  } catch {
+    return auth.createUser({
+      email,
+      emailVerified: true,
+      displayName: email.split("@")[0]
+    });
+  }
+}
+
+export async function requestAuthCode(request: ApiRequest) {
+  const email = requireEmail(request.data.email);
+  const purpose = authCodePurpose(request.data.purpose);
+  await enforceRateLimit(authCodeDocumentId(email, purpose), "auth-code", 5, 15 * 60_000);
+
+  if (purpose === "password_reset") {
+    try {
+      await auth.getUserByEmail(email);
+    } catch {
+      return { ok: true };
+    }
+  }
+
+  const code = String(randomInt(100000, 1_000_000));
+  await db.collection("authCodes").doc(authCodeDocumentId(email, purpose)).set({
+    email,
+    purpose,
+    codeHash: hashAuthCode(email, purpose, code),
+    attempts: 0,
+    expiresAt: Date.now() + 10 * 60_000,
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp()
+  });
+
+  await sendAuthCodeEmail(email, code, purpose);
+
+  return { ok: true };
+}
+
+export async function verifyAuthCode(request: ApiRequest) {
+  const email = requireEmail(request.data.email);
+  const code = requireString(request.data.code, "Codigo").trim();
+  await verifyStoredAuthCode(email, "login", code);
+  const user = await getOrCreateAuthUser(email);
+  const customToken = await auth.createCustomToken(user.uid);
+
+  await db.doc(`users/${user.uid}`).set(
+    {
+      email,
+      displayName: user.displayName || email.split("@")[0],
+      role: isAllowedAdminEmail(email) ? "admin" : "customer",
+      lastSeenAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp()
+    },
+    { merge: true }
+  );
+
+  return { ok: true, customToken };
+}
+
+export async function resetPasswordWithCode(request: ApiRequest) {
+  const email = requireEmail(request.data.email);
+  const code = requireString(request.data.code, "Codigo").trim();
+  const password = requireString(request.data.password, "Nova senha");
+  if (password.length < 6) {
+    throw new ApiError(400, "invalid-argument", "Use uma senha com pelo menos 6 caracteres.");
+  }
+
+  await verifyStoredAuthCode(email, "password_reset", code);
+  const user = await auth.getUserByEmail(email);
+  await auth.updateUser(user.uid, { password });
+  const customToken = await auth.createCustomToken(user.uid);
+
+  return { ok: true, customToken };
+}
+
 function audit(
   uid: string,
   action: string,
@@ -658,7 +862,7 @@ async function notifyOrderPaid(orderId: string) {
     title: "Pagamento aprovado",
     body: `Pedido ${order.productName ?? ""} recebido. Vamos iniciar a entrega.`,
     type: "payment",
-    link: `/pedido/${orderId}`
+    link: `/pedido/${orderId}?chat=1`
   });
   await createStoreNotification({
     userId: null,
@@ -691,10 +895,9 @@ export async function grantInitialAdmin(request: ApiRequest) {
     throw new ApiError(401, "unauthenticated", "Faca login com o e-mail administrador.");
   }
 
-  const configuredEmail = (process.env.BOOTSTRAP_ADMIN_EMAIL || "").trim().toLowerCase();
-  const requesterEmail = String(request.auth.token.email).trim().toLowerCase();
+  const requesterEmail = normalizeEmail(request.auth.token.email);
 
-  if (!configuredEmail || requesterEmail !== configuredEmail) {
+  if (!isAllowedAdminEmail(requesterEmail)) {
     throw new ApiError(403, "permission-denied", "E-mail nao autorizado para bootstrap.");
   }
 
@@ -1043,6 +1246,75 @@ async function ensureConversation(uid: string) {
   return uid;
 }
 
+function orderConversationId(orderId: string) {
+  return `order_${orderId}`;
+}
+
+async function ensureOrderConversation(orderId: string, order: Record<string, unknown>) {
+  const userId = typeof order.userId === "string" ? order.userId : "";
+  if (!userId) return "";
+
+  const user = await auth.getUser(userId).catch(() => null);
+  const userDoc = await db.doc(`users/${userId}`).get();
+  const profile = userDoc.data() ?? {};
+  const displayName =
+    typeof profile.displayName === "string" && profile.displayName
+      ? profile.displayName
+      : user?.displayName || user?.email || "Cliente";
+  const photoUrl =
+    typeof profile.photoUrl === "string" && profile.photoUrl ? profile.photoUrl : user?.photoURL || "";
+  const conversationId = orderConversationId(orderId);
+  const conversationRef = db.doc(`conversations/${conversationId}`);
+  const conversationSnapshot = await conversationRef.get();
+  const locked = order.status === "delivered";
+
+  await conversationRef.set(
+    {
+      userId,
+      userName: displayName,
+      userPhotoUrl: photoUrl,
+      adminEmail: allowedAdminEmail,
+      orderId,
+      orderStatus: typeof order.status === "string" ? order.status : "",
+      productName: typeof order.productName === "string" ? order.productName : "",
+      locked,
+      userOnline: false,
+      adminOnline: false,
+      ...(conversationSnapshot.exists
+        ? {}
+        : {
+            lastMessage: "Pagamento aprovado. Seu pedido esta sendo preparado.",
+            lastMessageAt: FieldValue.serverTimestamp(),
+            messageCount: 1,
+            unreadAdminCount: 0,
+            unreadUserCount: 1
+          }),
+      updatedAt: FieldValue.serverTimestamp()
+    },
+    { merge: true }
+  );
+
+  if (!conversationSnapshot.exists) {
+    await db.doc(`chatMessages/${conversationId}_payment_approved`).set({
+      conversationId,
+      senderId: "system",
+      senderRole: "admin",
+      text: "Pagamento aprovado. Seu pedido esta sendo preparado.",
+      imageUrl: "",
+      status: "received",
+      createdAt: FieldValue.serverTimestamp()
+    });
+  }
+
+  return conversationId;
+}
+
+async function userCanAccessConversation(conversationId: string, uid: string) {
+  const snapshot = await db.doc(`conversations/${conversationId}`).get();
+  const data = snapshot.data();
+  return snapshot.exists && data?.userId === uid ? { snapshot, data } : null;
+}
+
 export async function sendChatMessage(request: ApiRequest) {
   if (!request.auth?.uid) {
     throw new ApiError(401, "unauthenticated", "Faca login para enviar mensagens.");
@@ -1050,9 +1322,11 @@ export async function sendChatMessage(request: ApiRequest) {
   await enforceRateLimit(request.auth.uid, "chat", 40);
 
   const senderIsAdmin = request.auth.token.admin === true && request.data.conversationId;
-  const conversationId = senderIsAdmin
+  let conversationId = senderIsAdmin
     ? sanitizeId(request.data.conversationId)
-    : await ensureConversation(request.auth.uid);
+    : typeof request.data.conversationId === "string"
+      ? sanitizeId(request.data.conversationId)
+      : await ensureConversation(request.auth.uid);
   const text = sanitizeLongText(request.data.text, 1200);
   const imageUrl = sanitizeUrl(request.data.imageUrl, true);
 
@@ -1062,8 +1336,26 @@ export async function sendChatMessage(request: ApiRequest) {
 
   if (senderIsAdmin) {
     assertAdmin(request.auth);
+  } else if (conversationId === request.auth.uid) {
+    conversationId = await ensureConversation(request.auth.uid);
   } else if (conversationId !== request.auth.uid) {
-    throw new ApiError(403, "permission-denied", "Conversa nao autorizada.");
+    const access = await userCanAccessConversation(conversationId, request.auth.uid);
+    if (!access && conversationId.startsWith("order_")) {
+      const orderId = conversationId.replace(/^order_/, "");
+      const orderSnapshot = await db.doc(`orders/${orderId}`).get();
+      const order = orderSnapshot.data();
+      if (!orderSnapshot.exists || order?.userId !== request.auth.uid) {
+        throw new ApiError(403, "permission-denied", "Conversa nao autorizada.");
+      }
+      conversationId = await ensureOrderConversation(orderId, order);
+    } else if (!access) {
+      throw new ApiError(403, "permission-denied", "Conversa nao autorizada.");
+    }
+  }
+
+  const conversationSnapshot = await db.doc(`conversations/${conversationId}`).get();
+  if (conversationSnapshot.data()?.locked === true) {
+    throw new ApiError(412, "failed-precondition", "Esta conversa foi arquivada apos a entrega.");
   }
 
   const messageRef = db.collection("chatMessages").doc();
@@ -1085,6 +1377,7 @@ export async function sendChatMessage(request: ApiRequest) {
       lastMessageAt: FieldValue.serverTimestamp(),
       unreadAdminCount: senderRole === "user" ? FieldValue.increment(1) : FieldValue.increment(0),
       unreadUserCount: senderRole === "admin" ? FieldValue.increment(1) : FieldValue.increment(0),
+      messageCount: FieldValue.increment(1),
       typingBy: "",
       updatedAt: FieldValue.serverTimestamp()
     },
@@ -1122,8 +1415,11 @@ export async function markChatRead(request: ApiRequest) {
   const conversationId = sanitizeId(request.data.conversationId ?? request.auth.uid);
   const isAdmin = request.auth.token.admin === true;
 
-  if (!isAdmin && conversationId !== request.auth.uid) {
-    throw new ApiError(403, "permission-denied", "Conversa nao autorizada.");
+  if (isAdmin) {
+    assertAdmin(request.auth);
+  } else if (conversationId !== request.auth.uid) {
+    const access = await userCanAccessConversation(conversationId, request.auth.uid);
+    if (!access) throw new ApiError(403, "permission-denied", "Conversa nao autorizada.");
   }
 
   const messages = await db
@@ -1157,8 +1453,11 @@ export async function setChatTyping(request: ApiRequest) {
   const conversationId = sanitizeId(request.data.conversationId ?? request.auth.uid);
   const isAdmin = request.auth.token.admin === true;
 
-  if (!isAdmin && conversationId !== request.auth.uid) {
-    throw new ApiError(403, "permission-denied", "Conversa nao autorizada.");
+  if (isAdmin) {
+    assertAdmin(request.auth);
+  } else if (conversationId !== request.auth.uid) {
+    const access = await userCanAccessConversation(conversationId, request.auth.uid);
+    if (!access) throw new ApiError(403, "permission-denied", "Conversa nao autorizada.");
   }
 
   await db.doc(`conversations/${conversationId}`).set(
@@ -1233,6 +1532,9 @@ export async function updateOrderStatus(request: ApiRequest) {
   );
 
   const order = orderSnapshot.data()!;
+  if (order.userId) {
+    await ensureOrderConversation(orderId, { ...order, status });
+  }
   if (order.userId) {
     const title = status === "delivered" ? "Pedido entregue" : "Pedido atualizado";
     await createStoreNotification({
@@ -1695,6 +1997,9 @@ export async function processMercadoPagoWebhook(event: HandlerEvent) {
       exists: orderSnapshot.exists,
       order
     });
+    if (order) {
+      await ensureOrderConversation(orderId, { ...order, status: mappedStatus });
+    }
     if (order?.couponCode && order?.userId) {
       console.log("[MercadoPago webhook] Updating Firestore coupon usage", {
         couponPath: `coupons/${order.couponCode}`,

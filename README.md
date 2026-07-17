@@ -89,12 +89,20 @@ Recomendadas:
 
 ```env
 PUBLIC_SITE_URL=https://melobux.web.app
-BOOTSTRAP_ADMIN_EMAIL=seu-email-admin@exemplo.com
 NETLIFY_FUNCTIONS_BASE_URL=https://seu-site.netlify.app
 ALLOWED_ORIGINS=https://melobux.web.app,https://melobux.firebaseapp.com,http://localhost:5173,http://localhost:8888
+AUTH_CODE_SECRET=
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=
+SMTP_PASS=
+SMTP_FROM=
 ```
 
 `FIREBASE_PRIVATE_KEY` deve ser a chave privada da service account. Na Netlify, mantenha as quebras de linha como `\n` se colar em uma linha unica.
+
+`AUTH_CODE_SECRET` deve ser uma string longa e privada para assinar os codigos de login por e-mail e redefinicao de senha. As variaveis `SMTP_*` sao usadas para enviar esses codigos por e-mail. Sem SMTP configurado, o login Google e e-mail/senha continuam funcionando, mas a opcao "Entrar com codigo" nao consegue entregar o codigo.
 
 ## Firebase
 
@@ -123,6 +131,7 @@ Endpoints criados:
 - `/.netlify/functions/checkout`
 - `/.netlify/functions/webhook`
 - `/.netlify/functions/admin`
+- `/.netlify/functions/auth`
 
 O frontend chama esses endpoints com `fetch`. Quando o usuario esta logado, o Firebase ID Token e enviado no header:
 
@@ -131,6 +140,8 @@ Authorization: Bearer <firebase-id-token>
 ```
 
 As Netlify Functions validam o token com Firebase Admin SDK antes de qualquer acao sensivel.
+
+O painel administrativo e exclusivo para `carlosmelo0603n2@gmail.com`. Mesmo que outro usuario tente acessar `/admin`, o frontend bloqueia a tela e o backend tambem valida o e-mail antes de permitir qualquer acao administrativa.
 
 ## Mercado Pago
 
