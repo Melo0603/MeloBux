@@ -759,6 +759,34 @@ img {
   color: var(--muted);
 }
 
+.order-paid-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 18px;
+  margin-top: 18px;
+  border: 1px solid rgba(29, 160, 78, 0.22);
+  border-radius: 8px;
+  background: #f0fff4;
+  color: #102316;
+}
+
+.order-paid-card svg {
+  color: #1da04e;
+  flex: 0 0 auto;
+}
+
+.order-paid-card h2 {
+  margin: 0 0 4px;
+  font-size: 1.2rem;
+}
+
+.order-paid-card p {
+  margin: 0;
+  color: #356243;
+  line-height: 1.5;
+}
+
 .empty-state {
   min-height: 240px;
   display: grid;

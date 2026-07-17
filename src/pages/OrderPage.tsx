@@ -1,4 +1,4 @@
-import { Send, Star } from "lucide-react";
+import { CheckCircle2, Send, Star } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { EmptyState } from "../components/LoadingState";
@@ -8,6 +8,11 @@ import { useReviews } from "../hooks/useStoreContent";
 import { formatCurrency, formatRobux } from "../lib/format";
 import { createOrderReview, subscribeOrder } from "../services/catalog";
 import type { Order } from "../types";
+
+function orderStatusLabel(status: string) {
+  if (status === "paid") return "Pagamento aprovado";
+  return status;
+}
 
 export function OrderPage() {
   const { orderId = "" } = useParams();
@@ -36,6 +41,8 @@ export function OrderPage() {
 
   const isOwner = Boolean(user?.uid && order.userId === user.uid);
   const canReview = isOwner && order.status === "delivered" && !orderReview;
+  const isPaid = order.status === "paid";
+  const statusLabel = orderStatusLabel(order.status);
 
   async function submitReview(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -58,9 +65,18 @@ export function OrderPage() {
   return (
     <main className="content-shell order-page">
       <h1>Pedido {order.id}</h1>
+      {isPaid ? (
+        <section className="order-paid-card" aria-live="polite">
+          <CheckCircle2 size={30} aria-hidden />
+          <div>
+            <h2>Pagamento aprovado!</h2>
+            <p>Seu pagamento foi confirmado pelo Mercado Pago. Seu pedido está sendo preparado.</p>
+          </div>
+        </section>
+      ) : null}
       <div className="order-summary">
         <span>Status</span>
-        <strong>{order.status}</strong>
+        <strong>{statusLabel}</strong>
         <span>Produto</span>
         <strong>{order.productName}</strong>
         <span>Quantidade</span>
