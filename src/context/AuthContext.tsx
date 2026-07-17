@@ -14,8 +14,8 @@ import {
   type User
 } from "firebase/auth";
 import { auth, googleProvider } from "../lib/firebase";
-import { isAllowedAdminEmail } from "../lib/admin";
-import { AuthContext, type AuthContextValue } from "./AuthContextCore";
+import { syncUserProfile } from "../services/catalog";
+import { AuthContext, type AuthContextValue, type UserRole } from "./AuthContextCore";
 
 function getAuthInstance() {
   if (!auth) {
@@ -33,6 +33,7 @@ async function keepSessionLocal() {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(auth?.currentUser ?? null);
   const [claims, setClaims] = useState<Record<string, unknown>>({});
+  const [role, setRole] = useState<UserRole>("customer");
   const [loading, setLoading] = useState(Boolean(auth));
 
   useEffect(() => {
@@ -64,9 +65,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
       setUser(currentUser);
       try {
-        setClaims(currentUser ? (await currentUser.getIdTokenResult()).claims : {});
+        if (!currentUser) {
+          setClaims({});
+          setRole("customer");
+          return;
+        }
+
+        setClaims((await currentUser.getIdTokenResult()).claims);
+        const response = await syncUserProfile();
+        if (active) setRole(response.data.role);
       } catch {
         setClaims({});
+        setRole("customer");
       } finally {
         if (active) setLoading(false);
       }
@@ -136,21 +146,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const isAuthenticated = Boolean(user && !user.isAnonymous);
-    const isAllowedAdmin = isAuthenticated && isAllowedAdminEmail(user?.email);
+    const canAccessAdmin = role === "admin" || role === "staff";
 
     return {
       user,
       claims,
+      role,
       loading,
       isAuthenticated,
-      isAdmin: isAllowedAdmin && (claims.admin === true || user?.emailVerified === true),
+      isAdmin: isAuthenticated && canAccessAdmin,
       loginWithGoogle,
       loginWithEmail,
       loginWithCustomToken,
       registerWithEmail,
       logout
     };
-  }, [claims, loading, user]);
+  }, [claims, loading, role, user]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

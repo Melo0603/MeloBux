@@ -58,6 +58,7 @@ const adminCollections = new Set<AdminCollection>([
 ]);
 
 const allowedAdminEmail = "carlosmelo0603n2@gmail.com";
+const privilegedRoles = new Set(["admin", "staff"]);
 
 function normalizeEmail(value: unknown) {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -67,8 +68,8 @@ function isAllowedAdminEmail(value: unknown) {
   return normalizeEmail(value) === allowedAdminEmail;
 }
 
-function isAllowedAdminToken(token: Record<string, unknown>) {
-  return isAllowedAdminEmail(token.email) && (token.admin === true || token.email_verified === true);
+function normalizeRole(value: unknown) {
+  return value === "admin" || value === "staff" || value === "customer" ? value : "customer";
 }
 
 const orderStatuses = new Set([
@@ -221,14 +222,44 @@ export function asRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function assertAdmin(requestAuth: AuthContext | undefined) {
+async function ensureUserDocument(requestAuth: AuthContext) {
+  const email = normalizeEmail(requestAuth.token.email);
+  const user = await auth.getUser(requestAuth.uid).catch(() => null);
+  const userRef = db.doc(`users/${requestAuth.uid}`);
+  const snapshot = await userRef.get();
+  const existing = snapshot.data() ?? {};
+  const role = isAllowedAdminEmail(email) ? "admin" : normalizeRole(existing.role);
+
+  await userRef.set(
+    {
+      displayName:
+        user?.displayName ||
+        (typeof existing.displayName === "string" && existing.displayName ? existing.displayName : email.split("@")[0] || "Cliente"),
+      email: email || user?.email || null,
+      photoURL: user?.photoURL || existing.photoURL || existing.photoUrl || "",
+      photoUrl: user?.photoURL || existing.photoUrl || existing.photoURL || "",
+      role,
+      ...(snapshot.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
+      lastLoginAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp()
+    },
+    { merge: true }
+  );
+
+  return role;
+}
+
+async function assertStaffOrAdmin(requestAuth: AuthContext | undefined) {
   if (!requestAuth) {
     throw new ApiError(401, "unauthenticated", "Faca login para continuar.");
   }
 
-  if (!isAllowedAdminToken(requestAuth.token as Record<string, unknown>)) {
+  const role = await ensureUserDocument(requestAuth);
+  if (!privilegedRoles.has(role)) {
     throw new ApiError(403, "permission-denied", "Usuario sem permissao administrativa.");
   }
+
+  return role;
 }
 
 function sanitizeId(id: unknown) {
@@ -749,15 +780,19 @@ export async function verifyAuthCode(request: ApiRequest) {
   await verifyStoredAuthCode(email, "login", code);
   const user = await getOrCreateAuthUser(email);
   const customToken = await auth.createCustomToken(user.uid);
+  const userRef = db.doc(`users/${user.uid}`);
+  const userSnapshot = await userRef.get();
+  const existingRole = normalizeRole(userSnapshot.data()?.role);
 
-  await db.doc(`users/${user.uid}`).set(
+  await userRef.set(
     {
       email,
       displayName: user.displayName || email.split("@")[0],
-      role: isAllowedAdminEmail(email) ? "admin" : "customer",
+      role: isAllowedAdminEmail(email) ? "admin" : existingRole,
       lastSeenAt: FieldValue.serverTimestamp(),
+      lastLoginAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
-      createdAt: FieldValue.serverTimestamp()
+      ...(userSnapshot.exists ? {} : { createdAt: FieldValue.serverTimestamp() })
     },
     { merge: true }
   );
@@ -848,7 +883,7 @@ async function notifyUser(
     data,
     webpush: {
       fcmOptions: {
-        link: `${publicSiteUrl()}${data.orderId ? `/pedido/${data.orderId}` : "/"}`
+        link: `${publicSiteUrl()}${data.link || (data.orderId ? `/pedido/${data.orderId}` : "/")}`
       }
     }
   });
@@ -1015,7 +1050,7 @@ export async function grantInitialAdmin(request: ApiRequest) {
     );
   });
 
-  await auth.setCustomUserClaims(request.auth.uid, { admin: true });
+  await ensureUserDocument(request.auth);
   await db.doc(`users/${request.auth.uid}`).set(
     {
       email: requesterEmail,
@@ -1029,7 +1064,7 @@ export async function grantInitialAdmin(request: ApiRequest) {
 }
 
 export async function seedDefaultCatalog(request: ApiRequest) {
-  assertAdmin(request.auth);
+  await assertStaffOrAdmin(request.auth);
 
   const batch = db.batch();
 
@@ -1151,7 +1186,7 @@ export async function ensureInitialCatalog() {
 }
 
 export async function saveAdminDocument(request: ApiRequest) {
-  assertAdmin(request.auth);
+  await assertStaffOrAdmin(request.auth);
   await enforceRateLimit(request.auth!.uid, "admin-save", 80);
 
   const collection = sanitizeCollection(request.data.collection);
@@ -1182,7 +1217,7 @@ export async function saveAdminDocument(request: ApiRequest) {
 }
 
 export async function deleteAdminDocument(request: ApiRequest) {
-  assertAdmin(request.auth);
+  await assertStaffOrAdmin(request.auth);
   await enforceRateLimit(request.auth!.uid, "admin-delete", 30);
 
   const collection = sanitizeCollection(request.data.collection);
@@ -1209,7 +1244,7 @@ export async function deleteAdminDocument(request: ApiRequest) {
 }
 
 export async function duplicateAdminDocument(request: ApiRequest) {
-  assertAdmin(request.auth);
+  await assertStaffOrAdmin(request.auth);
   await enforceRateLimit(request.auth!.uid, "admin-duplicate", 30);
 
   const collection = sanitizeCollection(request.data.collection);
@@ -1255,6 +1290,7 @@ export async function updateUserProfile(request: ApiRequest) {
     throw new ApiError(401, "unauthenticated", "Faca login para alterar o perfil.");
   }
   await enforceRateLimit(request.auth.uid, "profile", 20);
+  const role = await ensureUserDocument(request.auth);
 
   const displayName = sanitizeText(request.data.displayName, 80);
   const photoUrl = sanitizeUrl(request.data.photoUrl, true);
@@ -1267,10 +1303,12 @@ export async function updateUserProfile(request: ApiRequest) {
     {
       displayName,
       photoUrl,
+      photoURL: photoUrl,
       robloxUsername,
       email: typeof request.auth.token.email === "string" ? request.auth.token.email : null,
-      role: isAllowedAdminToken(request.auth.token as Record<string, unknown>) ? "admin" : "customer",
+      role,
       soundEnabled,
+      lastLoginAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
       lastSeenAt: FieldValue.serverTimestamp()
     },
@@ -1289,6 +1327,15 @@ export async function updateUserProfile(request: ApiRequest) {
   }
 
   return { ok: true };
+}
+
+export async function syncUserProfile(request: ApiRequest) {
+  if (!request.auth?.uid) {
+    throw new ApiError(401, "unauthenticated", "Faca login para sincronizar o perfil.");
+  }
+
+  const role = await ensureUserDocument(request.auth);
+  return { ok: true, role };
 }
 
 export async function trackProductView(request: ApiRequest) {
@@ -1327,6 +1374,7 @@ async function ensureConversation(uid: string) {
   await db.doc(`conversations/${uid}`).set(
     {
       userId: uid,
+      type: "support",
       userName: displayName,
       userPhotoUrl: photoUrl,
       userOnline: true,
@@ -1337,6 +1385,43 @@ async function ensureConversation(uid: string) {
   );
 
   return uid;
+}
+
+export async function openSupportConversation(request: ApiRequest) {
+  if (!request.auth?.uid) {
+    throw new ApiError(401, "unauthenticated", "Faca login para abrir o suporte.");
+  }
+
+  await enforceRateLimit(request.auth.uid, "support-chat", 12, 60_000);
+  await ensureUserDocument(request.auth);
+  const conversationId = await ensureConversation(request.auth.uid);
+  const conversationSnapshot = await db.doc(`conversations/${conversationId}`).get();
+  const conversation = conversationSnapshot.data() ?? {};
+
+  if (!conversation.lastMessage) {
+    await db.doc(`conversations/${conversationId}`).set(
+      {
+        lastMessage: "Atendimento aberto.",
+        lastMessageAt: FieldValue.serverTimestamp(),
+        messageCount: FieldValue.increment(0),
+        unreadAdminCount: FieldValue.increment(1),
+        unreadUserCount: FieldValue.increment(0),
+        updatedAt: FieldValue.serverTimestamp()
+      },
+      { merge: true }
+    );
+  }
+
+  await createStoreNotification({
+    userId: null,
+    audience: "admin",
+    title: "Novo chat de suporte",
+    body: conversation.userName ? `${conversation.userName} abriu atendimento.` : "Cliente abriu atendimento.",
+    type: "chat",
+    link: "/admin"
+  });
+
+  return { ok: true, conversationId };
 }
 
 function orderConversationId(orderId: string) {
@@ -1369,6 +1454,7 @@ async function ensureOrderConversation(orderId: string, order: Record<string, un
       userId,
       userName: displayName,
       userPhotoUrl: photoUrl,
+      type: "order",
       adminEmail: allowedAdminEmail,
       orderId,
       orderStatus: typeof order.status === "string" ? order.status : "",
@@ -1400,6 +1486,14 @@ async function ensureOrderConversation(orderId: string, order: Record<string, un
       status: "received",
       createdAt: FieldValue.serverTimestamp()
     });
+    await createStoreNotification({
+      userId: null,
+      audience: "admin",
+      title: "Novo chat de pedido",
+      body: `${displayName} iniciou atendimento de ${typeof order.productName === "string" ? order.productName : "pedido"}.`,
+      type: "chat",
+      link: "/admin"
+    });
   }
 
   return conversationId;
@@ -1416,8 +1510,9 @@ export async function sendChatMessage(request: ApiRequest) {
     throw new ApiError(401, "unauthenticated", "Faca login para enviar mensagens.");
   }
   await enforceRateLimit(request.auth.uid, "chat", 40);
+  const role = await ensureUserDocument(request.auth);
+  const senderIsAdmin = privilegedRoles.has(role) && request.data.conversationId;
 
-  const senderIsAdmin = isAllowedAdminToken(request.auth.token as Record<string, unknown>) && request.data.conversationId;
   let conversationId = senderIsAdmin
     ? sanitizeId(request.data.conversationId)
     : typeof request.data.conversationId === "string"
@@ -1431,7 +1526,7 @@ export async function sendChatMessage(request: ApiRequest) {
   }
 
   if (senderIsAdmin) {
-    assertAdmin(request.auth);
+    await assertStaffOrAdmin(request.auth);
   } else if (conversationId === request.auth.uid) {
     conversationId = await ensureConversation(request.auth.uid);
   } else if (conversationId !== request.auth.uid) {
@@ -1495,12 +1590,13 @@ export async function sendChatMessage(request: ApiRequest) {
     title: senderRole === "admin" ? "Nova mensagem da MeloBux" : "Novo chat recebido",
     body: text || "Imagem enviada",
     type: "chat",
-    link: senderRole === "admin" && orderId ? `/pedido/${orderId}?chat=1` : senderRole === "admin" ? "/" : "/admin"
+    link: senderRole === "admin" && orderId ? `/pedido/${orderId}?chat=1` : senderRole === "admin" ? "/suporte" : "/admin"
   });
 
   if (senderRole === "admin") {
     await notifyUser(recipientUserId, "Nova mensagem da MeloBux", text || "Imagem enviada", {
-      type: "chat"
+      type: "chat",
+      link: orderId ? `/pedido/${orderId}?chat=1` : "/suporte"
     }).catch((error) => console.error("[notifications] Chat push failed", error));
   }
 
@@ -1518,10 +1614,11 @@ export async function markChatRead(request: ApiRequest) {
   if (!request.auth?.uid) throw new ApiError(401, "unauthenticated", "Faca login.");
 
   const conversationId = sanitizeId(request.data.conversationId ?? request.auth.uid);
-  const isAdmin = isAllowedAdminToken(request.auth.token as Record<string, unknown>);
+  const role = await ensureUserDocument(request.auth);
+  const isAdmin = privilegedRoles.has(role);
 
   if (isAdmin) {
-    assertAdmin(request.auth);
+    await assertStaffOrAdmin(request.auth);
   } else if (conversationId !== request.auth.uid) {
     const access = await userCanAccessConversation(conversationId, request.auth.uid);
     if (!access) throw new ApiError(403, "permission-denied", "Conversa nao autorizada.");
@@ -1556,10 +1653,11 @@ export async function setChatTyping(request: ApiRequest) {
   if (!request.auth?.uid) throw new ApiError(401, "unauthenticated", "Faca login.");
 
   const conversationId = sanitizeId(request.data.conversationId ?? request.auth.uid);
-  const isAdmin = isAllowedAdminToken(request.auth.token as Record<string, unknown>);
+  const role = await ensureUserDocument(request.auth);
+  const isAdmin = privilegedRoles.has(role);
 
   if (isAdmin) {
-    assertAdmin(request.auth);
+    await assertStaffOrAdmin(request.auth);
   } else if (conversationId !== request.auth.uid) {
     const access = await userCanAccessConversation(conversationId, request.auth.uid);
     if (!access) throw new ApiError(403, "permission-denied", "Conversa nao autorizada.");
@@ -1577,6 +1675,30 @@ export async function setChatTyping(request: ApiRequest) {
   return { ok: true };
 }
 
+export async function closeConversation(request: ApiRequest) {
+  await assertStaffOrAdmin(request.auth);
+  await enforceRateLimit(request.auth!.uid, "chat-close", 30, 60_000);
+
+  const conversationId = sanitizeId(request.data.conversationId);
+  await db.doc(`conversations/${conversationId}`).set(
+    {
+      locked: true,
+      closedAt: FieldValue.serverTimestamp(),
+      closedBy: request.auth!.uid,
+      updatedAt: FieldValue.serverTimestamp()
+    },
+    { merge: true }
+  );
+  await audit(
+    request.auth!.uid,
+    "closeConversation",
+    { conversationId },
+    { ip: clientIp(request.event), entity: "conversations", entityId: conversationId }
+  );
+
+  return { ok: true };
+}
+
 export async function markNotificationRead(request: ApiRequest) {
   if (!request.auth?.uid) throw new ApiError(401, "unauthenticated", "Faca login.");
 
@@ -1589,8 +1711,9 @@ export async function markNotificationRead(request: ApiRequest) {
   }
 
   const notification = snapshot.data()!;
+  const role = await ensureUserDocument(request.auth);
   const isAdminNotification =
-    notification.audience === "admin" && isAllowedAdminToken(request.auth.token as Record<string, unknown>);
+    notification.audience === "admin" && privilegedRoles.has(role);
   const isOwnerNotification = notification.userId === request.auth.uid;
 
   if (!isAdminNotification && !isOwnerNotification) {
@@ -1609,7 +1732,7 @@ export async function markNotificationRead(request: ApiRequest) {
 }
 
 export async function updateOrderStatus(request: ApiRequest) {
-  assertAdmin(request.auth);
+  await assertStaffOrAdmin(request.auth);
   await enforceRateLimit(request.auth!.uid, "order-status", 60);
 
   const orderId = sanitizeId(request.data.orderId);
@@ -1739,6 +1862,7 @@ export async function registerFcmToken(request: ApiRequest) {
   }
 
   const token = requireString(request.data.token, "Token FCM");
+  const role = await ensureUserDocument(request.auth);
 
   await db.doc(`users/${request.auth.uid}/fcmTokens/${token}`).set(
     {
@@ -1750,7 +1874,7 @@ export async function registerFcmToken(request: ApiRequest) {
     { merge: true }
   );
 
-  if (isAllowedAdminToken(request.auth.token as Record<string, unknown>)) {
+  if (privilegedRoles.has(role)) {
     await messaging.subscribeToTopic([token], "admins");
   }
 
@@ -1764,6 +1888,7 @@ export async function createCheckoutPreference(request: ApiRequest) {
     throw new ApiError(401, "unauthenticated", "Faca login para comprar.");
   }
   await enforceRateLimit(buyerUserId, "checkout", 12, 60_000);
+  const buyerRole = await ensureUserDocument(requestAuth);
 
   const productId = sanitizeId(request.data.productId);
   const robloxUsername = normalizeRobloxUsername(request.data.robloxUsername);
@@ -1797,8 +1922,9 @@ export async function createCheckoutPreference(request: ApiRequest) {
       email: buyerEmail ?? null,
       displayName: buyerEmail ?? `Cliente ${buyerUserId.slice(0, 6)}`,
       robloxUsername,
-      role: isAllowedAdminToken(requestAuth.token as Record<string, unknown>) ? "admin" : "customer",
+      role: buyerRole,
       ...(userExists ? {} : { createdAt: FieldValue.serverTimestamp() }),
+      lastLoginAt: FieldValue.serverTimestamp(),
       lastSeenAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp()
     },
@@ -1821,6 +1947,15 @@ export async function createCheckoutPreference(request: ApiRequest) {
     paymentProvider: "mercado_pago",
     createdAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp()
+  });
+
+  await createStoreNotification({
+    userId: null,
+    audience: "admin",
+    title: "Nova venda iniciada",
+    body: `${product.name} para ${robloxUsername}`,
+    type: "order",
+    link: "/admin"
   });
 
   const accessToken = requiredEnv("MERCADO_PAGO_ACCESS_TOKEN");

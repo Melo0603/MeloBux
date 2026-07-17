@@ -6,10 +6,12 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isAdmin() {
-      return signedIn()
-        && request.auth.token.email == 'carlosmelo0603n2@gmail.com'
-        && (request.auth.token.admin == true || request.auth.token.email_verified == true);
+    function userRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isStaffOrAdmin() {
+      return signedIn() && userRole() in ['admin', 'staff'];
     }
 
     function isPublished() {
@@ -17,12 +19,12 @@ service cloud.firestore {
     }
 
     match /categories/{categoryId} {
-      allow read: if isPublished() || isAdmin();
+      allow read: if isPublished() || isStaffOrAdmin();
       allow write: if false;
     }
 
     match /products/{productId} {
-      allow read: if isPublished() || isAdmin();
+      allow read: if isPublished() || isStaffOrAdmin();
       allow write: if false;
     }
 
@@ -32,32 +34,32 @@ service cloud.firestore {
     }
 
     match /reviews/{reviewId} {
-      allow read: if isPublished() || isAdmin();
+      allow read: if isPublished() || isStaffOrAdmin();
       allow write: if false;
     }
 
     match /faqs/{faqId} {
-      allow read: if isPublished() || isAdmin();
+      allow read: if isPublished() || isStaffOrAdmin();
       allow write: if false;
     }
 
     match /coupons/{couponId} {
-      allow read: if isAdmin() || isPublished();
+      allow read: if isStaffOrAdmin() || isPublished();
       allow write: if false;
     }
 
     match /banners/{bannerId} {
-      allow read: if isPublished() || isAdmin();
+      allow read: if isPublished() || isStaffOrAdmin();
       allow write: if false;
     }
 
     match /popups/{popupId} {
-      allow read: if isPublished() || isAdmin();
+      allow read: if isPublished() || isStaffOrAdmin();
       allow write: if false;
     }
 
     match /orders/{orderId} {
-      allow read: if isAdmin()
+      allow read: if isStaffOrAdmin()
         || (signedIn() && resource.data.userId == request.auth.uid)
         || (
           signedIn()
@@ -68,22 +70,22 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow read: if isAdmin() || (signedIn() && request.auth.uid == userId);
+      allow read: if isStaffOrAdmin() || (signedIn() && request.auth.uid == userId);
       allow write: if false;
 
       match /fcmTokens/{tokenId} {
-        allow read: if isAdmin() || (signedIn() && request.auth.uid == userId);
+        allow read: if isStaffOrAdmin() || (signedIn() && request.auth.uid == userId);
         allow write: if false;
       }
     }
 
     match /conversations/{conversationId} {
-      allow read: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+      allow read: if isStaffOrAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
       allow write: if false;
     }
 
     match /chatMessages/{messageId} {
-      allow read: if isAdmin()
+      allow read: if isStaffOrAdmin()
         || (
           signedIn()
           && get(/databases/$(database)/documents/conversations/$(resource.data.conversationId)).data.userId == request.auth.uid
@@ -92,28 +94,28 @@ service cloud.firestore {
     }
 
     match /notifications/{notificationId} {
-      allow read: if isAdmin()
+      allow read: if isStaffOrAdmin()
         || (signedIn() && resource.data.userId == request.auth.uid);
       allow write: if false;
     }
 
     match /productViews/{viewId} {
-      allow read: if isAdmin();
+      allow read: if isStaffOrAdmin();
       allow write: if false;
     }
 
     match /couponUsages/{usageId} {
-      allow read: if isAdmin();
+      allow read: if isStaffOrAdmin();
       allow write: if false;
     }
 
     match /adminAudit/{auditId} {
-      allow read: if isAdmin();
+      allow read: if isStaffOrAdmin();
       allow write: if false;
     }
 
     match /system/{document=**} {
-      allow read: if isAdmin();
+      allow read: if isStaffOrAdmin();
       allow write: if false;
     }
 

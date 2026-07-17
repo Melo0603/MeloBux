@@ -17,6 +17,7 @@ const LoginPage = lazy(() => import("./pages/LoginPage").then((module) => ({ def
 const OrderPage = lazy(() => import("./pages/OrderPage").then((module) => ({ default: module.OrderPage })));
 const ProductPage = lazy(() => import("./pages/ProductPage").then((module) => ({ default: module.ProductPage })));
 const PurchasesPage = lazy(() => import("./pages/PurchasesPage").then((module) => ({ default: module.PurchasesPage })));
+const SupportPage = lazy(() => import("./pages/SupportPage").then((module) => ({ default: module.SupportPage })));
 
 function lazyPage(element: ReactNode) {
   return <Suspense fallback={<PageSkeleton />}>{element}</Suspense>;
@@ -36,6 +37,7 @@ const router = createBrowserRouter([
       { path: "avaliacoes", element: <Navigate to="/#avaliacoes" replace /> },
       { path: "pedido/:orderId", element: lazyPage(<OrderPage />) },
       { path: "compras", element: <ProtectedRoute>{lazyPage(<PurchasesPage />)}</ProtectedRoute> },
+      { path: "suporte", element: <ProtectedRoute>{lazyPage(<SupportPage />)}</ProtectedRoute> },
       { path: "login", element: lazyPage(<LoginPage />) },
       {
         path: "admin",

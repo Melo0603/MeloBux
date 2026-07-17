@@ -20,6 +20,23 @@
   --shadow: 0 14px 40px rgba(37, 48, 71, 0.13);
 }
 
+html[data-theme="dark"] {
+  color-scheme: dark;
+  color: #f8fafc;
+  background: #111318;
+  --orange: #ffb33d;
+  --orange-dark: #f59e0b;
+  --yellow: #f8d66d;
+  --teal: #4dd4cf;
+  --ink: #f8fafc;
+  --muted: #a7b0c2;
+  --line: #2b303a;
+  --surface: #181b22;
+  --soft: #111318;
+  --danger: #f87171;
+  --shadow: 0 18px 46px rgba(0, 0, 0, 0.42);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -32,6 +49,7 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  background: var(--soft);
 }
 
 button,
@@ -69,6 +87,10 @@ img {
   background: rgba(255, 255, 255, 0.94);
   border-bottom: 1px solid var(--line);
   backdrop-filter: blur(14px);
+}
+
+html[data-theme="dark"] .app-header {
+  background: rgba(24, 27, 34, 0.94);
 }
 
 .brand {
@@ -148,6 +170,69 @@ img {
   place-items: center;
   font-size: 11px;
   font-weight: 800;
+}
+
+.menu-toggle {
+  display: inline-flex;
+}
+
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  border: 0;
+  background: rgba(0, 0, 0, 0.28);
+  cursor: pointer;
+}
+
+.side-drawer {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 80;
+  width: min(330px, 86vw);
+  padding: 18px;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  transform: translateX(-105%);
+  transition: transform 0.22s ease;
+}
+
+.side-drawer.open {
+  transform: translateX(0);
+}
+
+.drawer-header,
+.side-drawer nav {
+  display: grid;
+  gap: 10px;
+}
+
+.drawer-header {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.drawer-header strong {
+  font-size: 22px;
+  color: var(--orange);
+}
+
+.side-drawer nav a,
+.side-drawer nav button {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 800;
+  cursor: pointer;
+  text-align: left;
 }
 
 .sr-only {
@@ -2772,6 +2857,70 @@ button.product-picker-option {
   background: #fffdf4;
 }
 
+.admin-chat-workspace {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.admin-chat-summary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.admin-chat-summary div {
+  display: grid;
+  gap: 4px;
+}
+
+.admin-chat-summary span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.admin-chat-summary strong {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.admin-chat-actions {
+  flex-wrap: wrap;
+}
+
+.support-page .chat-panel {
+  min-height: 620px;
+}
+
+html[data-theme="dark"] .notification-menu,
+html[data-theme="dark"] .search-box,
+html[data-theme="dark"] .notice-card,
+html[data-theme="dark"] .purchase-card,
+html[data-theme="dark"] .chat-locked {
+  background: var(--surface);
+  color: var(--ink);
+}
+
+html[data-theme="dark"] .notice-card a {
+  color: var(--ink);
+}
+
+html[data-theme="dark"] input,
+html[data-theme="dark"] textarea,
+html[data-theme="dark"] select {
+  border-color: var(--line);
+  background: #111318;
+  color: var(--ink);
+}
+
+html[data-theme="dark"] .primary-button {
+  color: #141414;
+}
+
 .notice-card a {
   font-weight: 800;
   color: #111;
@@ -2806,34 +2955,26 @@ button.product-picker-option {
 
 @media (max-width: 720px) {
   .app-header.simple-header {
-    grid-template-columns: 1fr auto;
     gap: 10px;
     padding: 10px 14px;
+    min-height: 64px;
   }
 
   .site-nav {
-    display: flex;
-    gap: 8px;
-    overflow-x: auto;
-    padding-bottom: 4px;
-    scrollbar-width: none;
-  }
-
-  .site-nav::-webkit-scrollbar {
     display: none;
-  }
-
-  .site-nav a {
-    flex: 0 0 auto;
-    min-height: 40px;
-    padding: 10px 12px;
-    border-radius: 8px;
-    background: rgba(255, 247, 214, 0.65);
   }
 
   .top-nav {
     justify-content: flex-end;
     gap: 8px;
+  }
+
+  .theme-toggle {
+    display: none;
+  }
+
+  .brand {
+    font-size: 18px;
   }
 
   .auth-user-pill strong {
@@ -2885,5 +3026,13 @@ button.product-picker-option {
   .chat-composer .primary-button {
     grid-column: 1 / -1;
     width: 100%;
+  }
+
+  .admin-chat-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-chat-layout {
+    grid-template-columns: 1fr;
   }
 }

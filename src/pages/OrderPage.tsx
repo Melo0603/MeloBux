@@ -89,6 +89,7 @@ export function OrderPage() {
           <div>
             <h2>Pagamento aprovado!</h2>
             <p>Seu pagamento foi confirmado pelo Mercado Pago. Seu pedido esta sendo preparado.</p>
+            <p>Abrindo atendimento...</p>
             {showChat ? (
               <button type="button" className="primary-button" onClick={scrollToChat}>
                 <MessageCircle size={18} aria-hidden />

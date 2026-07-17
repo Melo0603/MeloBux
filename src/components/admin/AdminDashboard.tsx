@@ -33,9 +33,16 @@ export function AdminDashboard({ orders, products, users, conversations }: Admin
     return { label: date.toLocaleDateString("pt-BR", { weekday: "short" }), total };
   });
   const chartMax = Math.max(...chartDays.map((day) => day.total), 1);
+  const onlineThreshold = Date.now() - 5 * 60 * 1000;
+  const onlineUsers = users.filter((user) => {
+    const raw = user.lastSeenAt as { toDate?: () => Date } | string | undefined;
+    const date = raw && typeof raw === "object" && raw.toDate ? raw.toDate() : new Date(String(raw ?? ""));
+    return !Number.isNaN(date.getTime()) && date.getTime() >= onlineThreshold;
+  }).length;
 
   const cards = [
-    { label: "Hoje", value: formatCurrency(revenue("today")), icon: CreditCard },
+    { label: "Vendas do dia", value: formatCurrency(revenue("today")), icon: CreditCard },
+    { label: "Receita", value: formatCurrency(monthRevenue), icon: BarChart3 },
     { label: "Semana", value: formatCurrency(revenue("week")), icon: BarChart3 },
     { label: "Mês", value: formatCurrency(monthRevenue), icon: BarChart3 },
     { label: "Ano", value: formatCurrency(revenue("year")), icon: BarChart3 },
@@ -44,6 +51,8 @@ export function AdminDashboard({ orders, products, users, conversations }: Admin
     { label: "Pagos", value: orders.filter((order) => order.status === "paid").length, icon: PackageCheck },
     { label: "Entregues", value: orders.filter((order) => order.status === "delivered").length, icon: PackageCheck },
     { label: "Cancelados", value: orders.filter((order) => ["cancelled", "payment_rejected"].includes(order.status)).length, icon: PackageCheck },
+    { label: "Clientes online", value: onlineUsers, icon: Users },
+    { label: "Conversas abertas", value: conversations.filter((item) => item.locked !== true).length, icon: MessageSquare },
     { label: "Novos usuários", value: users.filter((user) => isSamePeriod(user.createdAt, "week")).length, icon: Users },
     { label: "Novas mensagens", value: conversations.reduce((sum, item) => sum + item.unreadAdminCount, 0), icon: MessageSquare }
   ];

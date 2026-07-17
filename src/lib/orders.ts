@@ -22,5 +22,5 @@ export function isOrderDelivered(status: string) {
 }
 
 export function isOrderChatAvailable(status: string) {
-  return !["delivered", "cancelled", "payment_rejected"].includes(status);
+  return !["cancelled", "payment_rejected"].includes(status);
 }

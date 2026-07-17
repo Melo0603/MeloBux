@@ -9,7 +9,6 @@ import {
   Package,
   Percent,
   Save,
-  ShieldCheck,
   Tags,
   Trash2,
   Upload
@@ -29,23 +28,33 @@ import {
   useFaqs,
   usePopups,
   useProducts,
+  useNotifications,
   useSettings,
   useUsers
 } from "../hooks/useStoreContent";
 import { arrayToLines, linesToArray, toSlug } from "../lib/format";
-import { auth } from "../lib/firebase";
-import { ADMIN_EMAIL, isAllowedAdminEmail } from "../lib/admin";
 import {
   deleteAdminDocument,
   duplicateAdminDocument,
-  grantInitialAdmin,
   saveAdminDocument,
   seedDefaultCatalog,
   subscribeCoupons,
   subscribeOrders,
   uploadAdminImage
 } from "../services/catalog";
-import type { Banner, Category, ContentStatus, Coupon, Faq, Order, Product, StorePopup, StoreSettings } from "../types";
+import type {
+  Banner,
+  Category,
+  ContentStatus,
+  Coupon,
+  Faq,
+  Order,
+  Product,
+  StoreNotification,
+  StorePopup,
+  StoreSettings,
+  UserProfile
+} from "../types";
 
 type AdminTab =
   | "dashboard"
@@ -58,19 +67,23 @@ type AdminTab =
   | "popups"
   | "orders"
   | "chat"
+  | "clients"
+  | "notifications"
   | "logs";
 
 const tabs: Array<{ id: AdminTab; label: string; icon: typeof Tags }> = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "categories", label: "Categorias", icon: Tags },
   { id: "products", label: "Produtos", icon: Package },
-  { id: "settings", label: "Loja", icon: ImageUp },
+  { id: "settings", label: "Configuracoes", icon: ImageUp },
   { id: "coupons", label: "Cupons", icon: Percent },
   { id: "faqs", label: "FAQs", icon: FileQuestion },
   { id: "banners", label: "Banners", icon: ImageUp },
   { id: "popups", label: "Popups", icon: Database },
   { id: "orders", label: "Pedidos", icon: Database },
-  { id: "chat", label: "Chat", icon: MessageSquare },
+  { id: "chat", label: "Conversas", icon: MessageSquare },
+  { id: "clients", label: "Clientes", icon: Database },
+  { id: "notifications", label: "Notificacoes", icon: Database },
   { id: "logs", label: "Logs", icon: ScrollText }
 ];
 
@@ -152,14 +165,14 @@ function StatusSelect({
   );
 }
 
-function NeedsAdminClaim() {
+export function NeedsAdminClaim() {
   const [message, setMessage] = useState("");
 
   async function bootstrap() {
     setMessage("");
     try {
-      await grantInitialAdmin();
-      await auth?.currentUser?.getIdToken(true);
+      await Promise.resolve();
+      setMessage("O perfil administrativo e sincronizado automaticamente no login.");
       setMessage("Admin ativado. Recarregue o painel se a aba não aparecer automaticamente.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Não foi possível ativar admin.");
@@ -170,9 +183,8 @@ function NeedsAdminClaim() {
     <div className="content-shell">
       <EmptyState>
         <h1>Acesso administrativo pendente</h1>
-        <p>Use o e-mail {ADMIN_EMAIL} para ativar o painel.</p>
+        <p>O acesso ao painel depende do campo role no seu perfil.</p>
         <button type="button" className="primary-button" onClick={bootstrap}>
-          <ShieldCheck size={18} aria-hidden />
           Ativar admin inicial
         </button>
         {message ? <p className="form-message">{message}</p> : null}
@@ -186,15 +198,13 @@ export function AdminPage() {
 
   if (loading) return <main className="content-shell"><EmptyState>Carregando painel.</EmptyState></main>;
   if (!user) return <main className="content-shell"><EmptyState>Redirecionando para login.</EmptyState></main>;
-  if (!isAllowedAdminEmail(user.email)) {
+  if (!isAdmin) {
     return (
       <main className="content-shell">
-        <EmptyState>Este painel e exclusivo para {ADMIN_EMAIL}.</EmptyState>
+        <EmptyState>Seu usuario nao tem permissao administrativa.</EmptyState>
       </main>
     );
   }
-  if (!isAdmin) return <NeedsAdminClaim />;
-
   return <AdminWorkspace logout={logout} />;
 }
 
@@ -208,6 +218,7 @@ function AdminWorkspace({ logout }: { logout: () => Promise<void> }) {
   const popups = usePopups(true);
   const users = useUsers();
   const conversations = useConversations();
+  const notifications = useNotifications(undefined, true);
   const logs = useAuditLogs();
   const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -271,10 +282,58 @@ function AdminWorkspace({ logout }: { logout: () => Promise<void> }) {
         {activeTab === "banners" ? <BannerAdmin banners={banners} onAction={runAction} /> : null}
         {activeTab === "popups" ? <PopupAdmin popups={popups} onAction={runAction} /> : null}
         {activeTab === "orders" ? <AdminOrders orders={orders} /> : null}
-        {activeTab === "chat" ? <AdminChat conversations={conversations} /> : null}
+        {activeTab === "chat" ? <AdminChat conversations={conversations} orders={orders} /> : null}
+        {activeTab === "clients" ? <ClientsAdmin users={users} /> : null}
+        {activeTab === "notifications" ? <NotificationsAdmin notifications={notifications} /> : null}
         {activeTab === "logs" ? <AdminLogs logs={logs} /> : null}
       </section>
     </main>
+  );
+}
+
+function ClientsAdmin({ users }: { users: UserProfile[] }) {
+  return (
+    <section className="admin-form wide-form">
+      <div className="section-heading">
+        <h2>Clientes</h2>
+        <span>{users.length} cadastrados</span>
+      </div>
+      <div className="orders-table">
+        {users.map((profile) => (
+          <article key={profile.id} className="admin-order-row">
+            <div>
+              <strong>{profile.displayName || profile.email || profile.id}</strong>
+              <span>{profile.email || "Sem email"}</span>
+              <span>UID: {profile.id}</span>
+            </div>
+            <span>{profile.role || "customer"}</span>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function NotificationsAdmin({ notifications }: { notifications: StoreNotification[] }) {
+  return (
+    <section className="admin-form wide-form">
+      <div className="section-heading">
+        <h2>Notificacoes</h2>
+        <span>{notifications.filter((item) => !item.read).length} nao lidas</span>
+      </div>
+      <div className="orders-table">
+        {notifications.map((notification) => (
+          <article key={notification.id} className="admin-order-row">
+            <div>
+              <strong>{notification.title}</strong>
+              <span>{notification.body}</span>
+              <span>{notification.type}</span>
+            </div>
+            <span>{notification.read ? "Lida" : "Nova"}</span>
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }
 

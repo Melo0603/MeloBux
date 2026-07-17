@@ -140,7 +140,7 @@ export interface UserProfile {
   displayName: string;
   photoUrl: string;
   email?: string | null;
-  role?: "customer" | "admin";
+  role?: "customer" | "staff" | "admin";
   robloxUsername?: string;
   robloxUserId?: string;
   createdAt?: unknown;
@@ -157,6 +157,7 @@ export interface ChatConversation {
   userName: string;
   userPhotoUrl: string;
   adminEmail?: string;
+  type?: "support" | "order";
   locked?: boolean;
   lastMessage: string;
   lastMessageAt?: unknown;

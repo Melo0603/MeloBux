@@ -1,9 +1,12 @@
 import { createContext } from "react";
 import type { User } from "firebase/auth";
 
+export type UserRole = "customer" | "staff" | "admin";
+
 export interface AuthContextValue {
   user: User | null;
   claims: Record<string, unknown>;
+  role: UserRole;
   loading: boolean;
   isAuthenticated: boolean;
   isAdmin: boolean;

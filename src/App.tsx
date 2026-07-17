@@ -34,6 +34,7 @@ export function App() {
           <Link to="/#avaliacoes">Avaliacoes</Link>
           <Link to="/carrinho">Carrinho</Link>
           {isAuthenticated ? <Link to="/compras">Suas compras</Link> : null}
+          {isAuthenticated ? <Link to="/suporte">Suporte</Link> : null}
           <a href={tiktokUrl} target="_blank" rel="noreferrer">
             TikTok
           </a>

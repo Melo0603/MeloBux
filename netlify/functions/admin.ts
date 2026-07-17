@@ -1,6 +1,7 @@
 import type { Handler } from "@netlify/functions";
 import {
   authenticate,
+  closeConversation,
   createOrderReview,
   deleteAdminDocument,
   duplicateAdminDocument,
@@ -11,12 +12,14 @@ import {
   jsonResponse,
   markChatRead,
   markNotificationRead,
+  openSupportConversation,
   parseBody,
   registerFcmToken,
   saveAdminDocument,
   seedDefaultCatalog,
   sendChatMessage,
   setChatTyping,
+  syncUserProfile,
   trackProductView,
   updateOrderStatus,
   updateUserProfile,
@@ -24,17 +27,20 @@ import {
 } from "./utils.js";
 
 const actions: Record<string, (request: ApiRequest) => Promise<unknown>> = {
+  closeConversation,
   createOrderReview,
   deleteAdminDocument,
   duplicateAdminDocument,
   grantInitialAdmin,
   markChatRead,
   markNotificationRead,
+  openSupportConversation,
   registerFcmToken,
   saveAdminDocument,
   seedDefaultCatalog,
   sendChatMessage,
   setChatTyping,
+  syncUserProfile,
   trackProductView,
   updateOrderStatus,
   updateUserProfile

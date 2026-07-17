@@ -1,5 +1,5 @@
 import { KeyRound, LogIn, Mail, RotateCcw, UserPlus } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuthUser } from "../hooks/useAuthUser";
 import { isFirebaseConfigured } from "../lib/firebase";
@@ -38,6 +38,16 @@ export function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get("mode") === "register") {
+      setMode("register");
+      setMessage("");
+      setCode("");
+      setCodeSent(false);
+    }
+  }, [location.search]);
 
   const redirectTo = useMemo(() => {
     const state = location.state as {

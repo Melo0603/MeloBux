@@ -732,6 +732,13 @@ export async function updateUserProfile(payload: {
   return adminAction<typeof payload, { ok: boolean }>("updateUserProfile", payload);
 }
 
+export async function syncUserProfile() {
+  return adminAction<void, { ok: boolean; role: "customer" | "staff" | "admin" }>(
+    "syncUserProfile",
+    undefined
+  );
+}
+
 export async function ensureAnonymousSession() {
   return requireAuthenticatedUser();
 }
@@ -751,6 +758,14 @@ export async function sendChatMessage(payload: {
   imageUrl?: string;
 }) {
   return adminAction<typeof payload, { ok: boolean; messageId: string }>("sendChatMessage", payload);
+}
+
+export async function openSupportConversation() {
+  return adminAction<void, { ok: boolean; conversationId: string }>("openSupportConversation", undefined);
+}
+
+export async function closeConversation(conversationId: string) {
+  return adminAction<{ conversationId: string }, { ok: boolean }>("closeConversation", { conversationId });
 }
 
 export async function markChatRead(conversationId?: string) {

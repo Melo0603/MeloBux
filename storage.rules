@@ -6,10 +6,12 @@ service firebase.storage {
       return request.auth != null;
     }
 
-    function isAdmin() {
-      return signedIn()
-        && request.auth.token.email == 'carlosmelo0603n2@gmail.com'
-        && (request.auth.token.admin == true || request.auth.token.email_verified == true);
+    function userRole() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isStaffOrAdmin() {
+      return signedIn() && userRole() in ['admin', 'staff'];
     }
 
     function validImage() {
@@ -22,11 +24,11 @@ service firebase.storage {
 
     match /public/{allPaths=**} {
       allow read: if true;
-      allow write: if isAdmin() && validImage();
+      allow write: if isStaffOrAdmin() && validImage();
     }
 
     match /users/{userId}/{allPaths=**} {
-      allow read: if isAdmin() || (signedIn() && request.auth.uid == userId);
+      allow read: if isStaffOrAdmin() || (signedIn() && request.auth.uid == userId);
       allow write: if signedIn() && request.auth.uid == userId && validImage();
     }
 
