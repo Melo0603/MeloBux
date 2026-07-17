@@ -67,6 +67,10 @@ function isAllowedAdminEmail(value: unknown) {
   return normalizeEmail(value) === allowedAdminEmail;
 }
 
+function isAllowedAdminToken(token: Record<string, unknown>) {
+  return isAllowedAdminEmail(token.email) && (token.admin === true || token.email_verified === true);
+}
+
 const orderStatuses = new Set([
   "pending_payment",
   "payment_pending",
@@ -222,7 +226,7 @@ function assertAdmin(requestAuth: AuthContext | undefined) {
     throw new ApiError(401, "unauthenticated", "Faca login para continuar.");
   }
 
-  if (requestAuth.token.admin !== true || !isAllowedAdminEmail(requestAuth.token.email)) {
+  if (!isAllowedAdminToken(requestAuth.token as Record<string, unknown>)) {
     throw new ApiError(403, "permission-denied", "Usuario sem permissao administrativa.");
   }
 }
@@ -850,20 +854,98 @@ async function notifyUser(
   });
 }
 
-async function notifyOrderPaid(orderId: string) {
-  const orderSnapshot = await db.doc(`orders/${orderId}`).get();
-  const order = orderSnapshot.data();
+function getNestedString(source: unknown, path: string[]) {
+  let current = source;
+  for (const key of path) {
+    if (!current || typeof current !== "object" || Array.isArray(current)) return "";
+    current = (current as Record<string, unknown>)[key];
+  }
+  return typeof current === "string" ? current.trim() : "";
+}
 
-  if (!order?.userId) return;
+function getPaymentEmail(payment?: Record<string, unknown>) {
+  return (
+    normalizeEmail(getNestedString(payment, ["payer", "email"])) ||
+    normalizeEmail(getNestedString(payment, ["metadata", "buyer_email"])) ||
+    normalizeEmail(getNestedString(payment, ["additional_info", "payer", "email"]))
+  );
+}
 
-  await createStoreNotification({
-    userId: String(order.userId),
-    audience: "user",
-    title: "Pagamento aprovado",
-    body: `Pedido ${order.productName ?? ""} recebido. Vamos iniciar a entrega.`,
-    type: "payment",
-    link: `/pedido/${orderId}?chat=1`
+async function findUserIdByEmail(email: unknown) {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return "";
+  const user = await auth.getUserByEmail(normalized).catch(() => null);
+  return user?.uid ?? "";
+}
+
+async function resolveOrderUserId(
+  orderId: string,
+  order: Record<string, unknown>,
+  payment?: Record<string, unknown>
+) {
+  const existingUserId = typeof order.userId === "string" ? order.userId.trim() : "";
+  if (existingUserId) return existingUserId;
+
+  const metadataUserId = getNestedString(payment, ["metadata", "user_id"]);
+  if (metadataUserId) {
+    const user = await auth.getUser(metadataUserId).catch(() => null);
+    if (user) {
+      await db.doc(`orders/${orderId}`).set(
+        {
+          userId: user.uid,
+          buyerEmail: normalizeEmail(order.buyerEmail) || user.email || null,
+          updatedAt: FieldValue.serverTimestamp()
+        },
+        { merge: true }
+      );
+      return user.uid;
+    }
+  }
+
+  const emailCandidates = [
+    order.buyerEmail,
+    getPaymentEmail(payment),
+    getNestedString(payment, ["metadata", "buyer_email"])
+  ];
+
+  for (const email of emailCandidates) {
+    const userId = await findUserIdByEmail(email);
+    if (userId) {
+      await db.doc(`orders/${orderId}`).set(
+        {
+          userId,
+          buyerEmail: normalizeEmail(email) || null,
+          updatedAt: FieldValue.serverTimestamp()
+        },
+        { merge: true }
+      );
+      await db.doc(`users/${userId}`).set(
+        {
+          email: normalizeEmail(email) || null,
+          updatedAt: FieldValue.serverTimestamp()
+        },
+        { merge: true }
+      );
+      return userId;
+    }
+  }
+
+  console.error("[orders] Paid order without resolvable userId", {
+    orderId,
+    buyerEmail: order.buyerEmail ?? null,
+    paymentEmail: getPaymentEmail(payment) || null
   });
+  return "";
+}
+
+async function notifyOrderPaid(orderId: string, orderOverride?: Record<string, unknown>) {
+  const orderSnapshot = await db.doc(`orders/${orderId}`).get();
+  const order = orderOverride ?? orderSnapshot.data();
+
+  if (!order) return;
+
+  const userId = await resolveOrderUserId(orderId, order);
+
   await createStoreNotification({
     userId: null,
     audience: "admin",
@@ -873,10 +955,21 @@ async function notifyOrderPaid(orderId: string) {
     link: "/admin"
   });
 
-  await notifyUser(String(order.userId), "Pagamento aprovado", `Pedido ${order.productName ?? ""} recebido. Vamos iniciar a entrega.`, {
-    orderId,
-    status: "paid"
-  });
+  if (userId) {
+    await createStoreNotification({
+      userId,
+      audience: "user",
+      title: "Pagamento aprovado",
+      body: `Pedido ${order.productName ?? ""} recebido. Vamos iniciar a entrega.`,
+      type: "payment",
+      link: `/pedido/${orderId}?chat=1`
+    });
+    await notifyUser(userId, "Pagamento aprovado", `Pedido ${order.productName ?? ""} recebido. Vamos iniciar a entrega.`, {
+      orderId,
+      status: "paid"
+    }).catch((error) => console.error("[notifications] User push failed", error));
+  }
+
   await messaging.send({
     topic: "admins",
     notification: {
@@ -887,7 +980,7 @@ async function notifyOrderPaid(orderId: string) {
       orderId,
       status: "paid"
     }
-  });
+  }).catch((error) => console.error("[notifications] Admin push failed", error));
 }
 
 export async function grantInitialAdmin(request: ApiRequest) {
@@ -1176,7 +1269,7 @@ export async function updateUserProfile(request: ApiRequest) {
       photoUrl,
       robloxUsername,
       email: typeof request.auth.token.email === "string" ? request.auth.token.email : null,
-      role: request.auth.token.admin === true ? "admin" : "customer",
+      role: isAllowedAdminToken(request.auth.token as Record<string, unknown>) ? "admin" : "customer",
       soundEnabled,
       updatedAt: FieldValue.serverTimestamp(),
       lastSeenAt: FieldValue.serverTimestamp()
@@ -1251,8 +1344,11 @@ function orderConversationId(orderId: string) {
 }
 
 async function ensureOrderConversation(orderId: string, order: Record<string, unknown>) {
-  const userId = typeof order.userId === "string" ? order.userId : "";
-  if (!userId) return "";
+  const userId = await resolveOrderUserId(orderId, order);
+  if (!userId) {
+    console.error("[chat] Cannot create order conversation without userId", { orderId });
+    return "";
+  }
 
   const user = await auth.getUser(userId).catch(() => null);
   const userDoc = await db.doc(`users/${userId}`).get();
@@ -1321,7 +1417,7 @@ export async function sendChatMessage(request: ApiRequest) {
   }
   await enforceRateLimit(request.auth.uid, "chat", 40);
 
-  const senderIsAdmin = request.auth.token.admin === true && request.data.conversationId;
+  const senderIsAdmin = isAllowedAdminToken(request.auth.token as Record<string, unknown>) && request.data.conversationId;
   let conversationId = senderIsAdmin
     ? sanitizeId(request.data.conversationId)
     : typeof request.data.conversationId === "string"
@@ -1344,17 +1440,22 @@ export async function sendChatMessage(request: ApiRequest) {
       const orderId = conversationId.replace(/^order_/, "");
       const orderSnapshot = await db.doc(`orders/${orderId}`).get();
       const order = orderSnapshot.data();
-      if (!orderSnapshot.exists || order?.userId !== request.auth.uid) {
+      const resolvedOrderUserId = order ? await resolveOrderUserId(orderId, order) : "";
+      if (!orderSnapshot.exists || resolvedOrderUserId !== request.auth.uid) {
         throw new ApiError(403, "permission-denied", "Conversa nao autorizada.");
       }
-      conversationId = await ensureOrderConversation(orderId, order);
+      conversationId = await ensureOrderConversation(orderId, { ...order, userId: resolvedOrderUserId });
+      if (!conversationId) {
+        throw new ApiError(409, "failed-precondition", "Pedido sem usuario vinculado.");
+      }
     } else if (!access) {
       throw new ApiError(403, "permission-denied", "Conversa nao autorizada.");
     }
   }
 
   const conversationSnapshot = await db.doc(`conversations/${conversationId}`).get();
-  if (conversationSnapshot.data()?.locked === true) {
+  const conversation = conversationSnapshot.data() ?? {};
+  if (conversation.locked === true) {
     throw new ApiError(412, "failed-precondition", "Esta conversa foi arquivada apos a entrega.");
   }
 
@@ -1384,19 +1485,23 @@ export async function sendChatMessage(request: ApiRequest) {
     { merge: true }
   );
 
+  const recipientUserId =
+    typeof conversation.userId === "string" && conversation.userId ? conversation.userId : conversationId;
+  const orderId = typeof conversation.orderId === "string" ? conversation.orderId : "";
+
   await createStoreNotification({
-    userId: senderRole === "admin" ? conversationId : null,
+    userId: senderRole === "admin" ? recipientUserId : null,
     audience: senderRole === "admin" ? "user" : "admin",
     title: senderRole === "admin" ? "Nova mensagem da MeloBux" : "Novo chat recebido",
     body: text || "Imagem enviada",
     type: "chat",
-    link: "/"
+    link: senderRole === "admin" && orderId ? `/pedido/${orderId}?chat=1` : senderRole === "admin" ? "/" : "/admin"
   });
 
   if (senderRole === "admin") {
-    await notifyUser(conversationId, "Nova mensagem da MeloBux", text || "Imagem enviada", {
+    await notifyUser(recipientUserId, "Nova mensagem da MeloBux", text || "Imagem enviada", {
       type: "chat"
-    });
+    }).catch((error) => console.error("[notifications] Chat push failed", error));
   }
 
   await audit(
@@ -1413,7 +1518,7 @@ export async function markChatRead(request: ApiRequest) {
   if (!request.auth?.uid) throw new ApiError(401, "unauthenticated", "Faca login.");
 
   const conversationId = sanitizeId(request.data.conversationId ?? request.auth.uid);
-  const isAdmin = request.auth.token.admin === true;
+  const isAdmin = isAllowedAdminToken(request.auth.token as Record<string, unknown>);
 
   if (isAdmin) {
     assertAdmin(request.auth);
@@ -1451,7 +1556,7 @@ export async function setChatTyping(request: ApiRequest) {
   if (!request.auth?.uid) throw new ApiError(401, "unauthenticated", "Faca login.");
 
   const conversationId = sanitizeId(request.data.conversationId ?? request.auth.uid);
-  const isAdmin = request.auth.token.admin === true;
+  const isAdmin = isAllowedAdminToken(request.auth.token as Record<string, unknown>);
 
   if (isAdmin) {
     assertAdmin(request.auth);
@@ -1485,7 +1590,7 @@ export async function markNotificationRead(request: ApiRequest) {
 
   const notification = snapshot.data()!;
   const isAdminNotification =
-    notification.audience === "admin" && request.auth.token.admin === true;
+    notification.audience === "admin" && isAllowedAdminToken(request.auth.token as Record<string, unknown>);
   const isOwnerNotification = notification.userId === request.auth.uid;
 
   if (!isAdminNotification && !isOwnerNotification) {
@@ -1645,7 +1750,7 @@ export async function registerFcmToken(request: ApiRequest) {
     { merge: true }
   );
 
-  if (request.auth.token.admin === true) {
+  if (isAllowedAdminToken(request.auth.token as Record<string, unknown>)) {
     await messaging.subscribeToTopic([token], "admins");
   }
 
@@ -1653,15 +1758,17 @@ export async function registerFcmToken(request: ApiRequest) {
 }
 
 export async function createCheckoutPreference(request: ApiRequest) {
-  if (!request.auth?.uid) {
+  const requestAuth = request.auth;
+  const buyerUserId = requestAuth?.uid?.trim() ?? "";
+  if (!requestAuth || !buyerUserId) {
     throw new ApiError(401, "unauthenticated", "Faca login para comprar.");
   }
-  await enforceRateLimit(request.auth.uid, "checkout", 12, 60_000);
+  await enforceRateLimit(buyerUserId, "checkout", 12, 60_000);
 
   const productId = sanitizeId(request.data.productId);
   const robloxUsername = normalizeRobloxUsername(request.data.robloxUsername);
   const buyerEmail =
-    typeof request.auth.token.email === "string" ? request.auth.token.email : undefined;
+    typeof requestAuth.token.email === "string" ? requestAuth.token.email : undefined;
 
   const productSnapshot = await db.doc(`products/${productId}`).get();
 
@@ -1678,19 +1785,19 @@ export async function createCheckoutPreference(request: ApiRequest) {
   }
 
   const price = parseMoney(product.price);
-  const coupon = await resolveCoupon(request.data.couponCode, price, request.auth.uid);
+  const coupon = await resolveCoupon(request.data.couponCode, price, buyerUserId);
   const totalPrice = Math.max(0.01, Math.round((price - coupon.discountTotal) * 100) / 100);
   const orderRef = db.collection("orders").doc();
   const orderId = orderRef.id;
 
-  const userRef = db.doc(`users/${request.auth.uid}`);
+  const userRef = db.doc(`users/${buyerUserId}`);
   const userExists = (await userRef.get()).exists;
   await userRef.set(
     {
       email: buyerEmail ?? null,
-      displayName: buyerEmail ?? `Cliente ${request.auth.uid.slice(0, 6)}`,
+      displayName: buyerEmail ?? `Cliente ${buyerUserId.slice(0, 6)}`,
       robloxUsername,
-      role: request.auth.token.admin === true ? "admin" : "customer",
+      role: isAllowedAdminToken(requestAuth.token as Record<string, unknown>) ? "admin" : "customer",
       ...(userExists ? {} : { createdAt: FieldValue.serverTimestamp() }),
       lastSeenAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp()
@@ -1699,7 +1806,7 @@ export async function createCheckoutPreference(request: ApiRequest) {
   );
 
   await orderRef.set({
-    userId: request.auth.uid,
+    userId: buyerUserId,
     buyerEmail: buyerEmail ?? null,
     productId,
     categorySlug: product.categorySlug,
@@ -1733,6 +1840,8 @@ export async function createCheckoutPreference(request: ApiRequest) {
     metadata: {
       order_id: orderId,
       product_id: productId,
+      user_id: buyerUserId,
+      buyer_email: buyerEmail ?? "",
       roblox_username: robloxUsername,
       coupon_code: coupon.couponCode ?? ""
     },
@@ -1992,55 +2101,68 @@ export async function processMercadoPagoWebhook(event: HandlerEvent) {
   if (mappedStatus === "paid") {
     const orderSnapshot = await db.doc(`orders/${orderId}`).get();
     const order = orderSnapshot.data();
+    const resolvedUserId = order ? await resolveOrderUserId(orderId, order, payment) : "";
+    const paidOrder: Record<string, unknown> | null = order
+      ? {
+          ...order,
+          userId: resolvedUserId || order.userId,
+          status: mappedStatus
+        }
+      : null;
+    const paidOrderUserId = typeof paidOrder?.userId === "string" ? paidOrder.userId : "";
+    const paidOrderCouponCode = typeof paidOrder?.couponCode === "string" ? paidOrder.couponCode : "";
+    const paidOrderProductId = typeof paidOrder?.productId === "string" ? paidOrder.productId : "";
     console.log("[MercadoPago webhook] Firestore order located", {
       orderPath: `orders/${orderId}`,
       exists: orderSnapshot.exists,
-      order
+      order: paidOrder ?? order
     });
-    if (order) {
-      await ensureOrderConversation(orderId, { ...order, status: mappedStatus });
+    if (paidOrder && paidOrderUserId) {
+      await ensureOrderConversation(orderId, paidOrder);
+    } else {
+      console.error("[MercadoPago webhook] Paid order has no userId after resolution", { orderId });
     }
-    if (order?.couponCode && order?.userId) {
+    if (paidOrderCouponCode && paidOrderUserId) {
       console.log("[MercadoPago webhook] Updating Firestore coupon usage", {
-        couponPath: `coupons/${order.couponCode}`,
-        couponUsagePath: `couponUsages/${order.couponCode}_${order.userId}`,
+        couponPath: `coupons/${paidOrderCouponCode}`,
+        couponUsagePath: `couponUsages/${paidOrderCouponCode}_${paidOrderUserId}`,
         changes: {
           couponUsedCount: "+1",
           couponUpdatedAt: "FieldValue.serverTimestamp()",
           couponUsageOrderId: orderId
         }
       });
-      await db.doc(`coupons/${order.couponCode}`).set(
+      await db.doc(`coupons/${paidOrderCouponCode}`).set(
         {
           usedCount: FieldValue.increment(1),
           updatedAt: FieldValue.serverTimestamp()
         },
         { merge: true }
       );
-      await db.doc(`couponUsages/${order.couponCode}_${order.userId}`).set(
+      await db.doc(`couponUsages/${paidOrderCouponCode}_${paidOrderUserId}`).set(
         {
-          couponCode: order.couponCode,
-          userId: order.userId,
+          couponCode: paidOrderCouponCode,
+          userId: paidOrderUserId,
           orderId,
           createdAt: FieldValue.serverTimestamp()
         },
         { merge: true }
       );
       console.log("[MercadoPago webhook] Firestore coupon usage update completed", {
-        couponPath: `coupons/${order.couponCode}`,
-        couponUsagePath: `couponUsages/${order.couponCode}_${order.userId}`
+        couponPath: `coupons/${paidOrderCouponCode}`,
+        couponUsagePath: `couponUsages/${paidOrderCouponCode}_${paidOrderUserId}`
       });
     }
-    if (order?.productId) {
+    if (paidOrderProductId) {
       console.log("[MercadoPago webhook] Updating Firestore product counters", {
-        productPath: `products/${order.productId}`,
+        productPath: `products/${paidOrderProductId}`,
         changes: {
           soldCount: "+1",
           stock: "-1",
           updatedAt: "FieldValue.serverTimestamp()"
         }
       });
-      await db.doc(`products/${order.productId}`).set(
+      await db.doc(`products/${paidOrderProductId}`).set(
         {
           soldCount: FieldValue.increment(1),
           stock: FieldValue.increment(-1),
@@ -2049,11 +2171,11 @@ export async function processMercadoPagoWebhook(event: HandlerEvent) {
         { merge: true }
       );
       console.log("[MercadoPago webhook] Firestore product counters update completed", {
-        productPath: `products/${order.productId}`
+        productPath: `products/${paidOrderProductId}`
       });
     }
     console.log("[MercadoPago webhook] Creating paid order notification", { orderId });
-    await notifyOrderPaid(orderId);
+    await notifyOrderPaid(orderId, paidOrder ?? order);
     console.log("[MercadoPago webhook] Paid order notification completed", { orderId });
   }
 

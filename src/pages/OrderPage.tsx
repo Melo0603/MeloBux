@@ -1,4 +1,4 @@
-import { CheckCircle2, Send, Star } from "lucide-react";
+import { CheckCircle2, MessageCircle, Send, Star } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { ChatPanel } from "../components/ChatPanel";
@@ -31,17 +31,28 @@ export function OrderPage() {
     () => reviews.find((review) => review.orderId === orderId),
     [orderId, reviews]
   );
-  const isOwner = Boolean(order && user?.uid && order.userId === user.uid);
+  const buyerEmailMatches =
+    Boolean(user?.emailVerified && user.email && order?.buyerEmail) &&
+    order?.buyerEmail?.trim().toLowerCase() === user?.email?.trim().toLowerCase();
+  const isOwner = Boolean(
+    order &&
+      user?.uid &&
+      (order.userId === user.uid || buyerEmailMatches)
+  );
   const canReview = Boolean(isOwner && order?.status === "delivered" && !orderReview);
   const isPaid = order?.status === "paid";
   const statusLabel = order ? orderStatusLabel(order.status) : "";
   const showChat = Boolean(order && isOwner && isOrderChatAvailable(order.status));
 
   useEffect(() => {
-    if (showChat && searchParams.get("chat") === "1") {
+    if (showChat && (searchParams.get("chat") === "1" || (isPaid && conversation))) {
       chatRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-  }, [searchParams, showChat]);
+  }, [conversation, isPaid, searchParams, showChat]);
+
+  function scrollToChat() {
+    chatRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   if (!order) {
     return (
@@ -78,6 +89,12 @@ export function OrderPage() {
           <div>
             <h2>Pagamento aprovado!</h2>
             <p>Seu pagamento foi confirmado pelo Mercado Pago. Seu pedido esta sendo preparado.</p>
+            {showChat ? (
+              <button type="button" className="primary-button" onClick={scrollToChat}>
+                <MessageCircle size={18} aria-hidden />
+                Conversar com vendedor
+              </button>
+            ) : null}
           </div>
         </section>
       ) : null}

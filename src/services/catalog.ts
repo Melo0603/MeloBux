@@ -416,20 +416,66 @@ export function subscribeOrders(onValue: Listener<Order[]>) {
   });
 }
 
-export function subscribeUserOrders(userId: string | null | undefined, onValue: Listener<Order[]>) {
+function timestampMillis(value: unknown) {
+  if (value && typeof value === "object" && "toMillis" in value && typeof value.toMillis === "function") {
+    return value.toMillis() as number;
+  }
+  if (value && typeof value === "object" && "toDate" in value && typeof value.toDate === "function") {
+    return value.toDate().getTime() as number;
+  }
+  const date = new Date(String(value ?? ""));
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+}
+
+function sortOrdersByCreatedAt(orders: Order[]) {
+  return [...orders].sort((first, second) => timestampMillis(second.createdAt) - timestampMillis(first.createdAt));
+}
+
+export function subscribeUserOrders(
+  userId: string | null | undefined,
+  buyerEmail: string | null | undefined,
+  onValue: Listener<Order[]>
+) {
   if (!userId || !isFirebaseConfigured || !db) {
     return fallbackUnsubscribe([], onValue);
   }
 
-  const ordersQuery = query(
+  const byUserIdQuery = query(
     collection(db, "orders"),
     where("userId", "==", userId),
     orderBy("createdAt", "desc")
   );
+  const normalizedEmail = buyerEmail?.trim() ?? "";
+  const byEmailQuery = normalizedEmail
+    ? query(collection(db, "orders"), where("buyerEmail", "==", normalizedEmail), orderBy("createdAt", "desc"))
+    : null;
+  let byUserId: Order[] = [];
+  let byEmail: Order[] = [];
 
-  return onSnapshot(ordersQuery, (snapshot) => {
-    onValue(snapshot.docs.map((item) => withId<Order>(item.data(), item.id)));
+  function publish() {
+    const merged = new Map<string, Order>();
+    for (const order of [...byUserId, ...byEmail]) {
+      merged.set(order.id, order);
+    }
+    onValue(sortOrdersByCreatedAt([...merged.values()]));
+  }
+
+  const unsubscribeByUserId = onSnapshot(byUserIdQuery, (snapshot) => {
+    byUserId = snapshot.docs.map((item) => withId<Order>(item.data(), item.id));
+    publish();
   });
+
+  const unsubscribeByEmail = byEmailQuery
+    ? onSnapshot(byEmailQuery, (snapshot) => {
+        byEmail = snapshot.docs.map((item) => withId<Order>(item.data(), item.id));
+        publish();
+      })
+    : undefined;
+
+  return () => {
+    unsubscribeByUserId();
+    unsubscribeByEmail?.();
+  };
 }
 
 export function subscribeOrder(orderId: string, onValue: Listener<Order | null>) {

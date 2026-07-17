@@ -113,10 +113,10 @@ export function usePopups(admin = false) {
   return popups;
 }
 
-export function useUserOrders(userId: string | null | undefined) {
+export function useUserOrders(userId: string | null | undefined, buyerEmail?: string | null) {
   const [orders, setOrders] = useState<Order[]>([]);
 
-  useEffect(() => subscribeUserOrders(userId, setOrders), [userId]);
+  useEffect(() => subscribeUserOrders(userId, buyerEmail, setOrders), [buyerEmail, userId]);
 
   return orders;
 }

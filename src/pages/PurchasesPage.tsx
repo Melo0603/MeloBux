@@ -53,7 +53,7 @@ function OrderList({
 
 export function PurchasesPage() {
   const { user } = useAuthUser();
-  const orders = useUserOrders(user?.uid);
+  const orders = useUserOrders(user?.uid, user?.email);
   const [selectedOrderId, setSelectedOrderId] = useState("");
   const selectedConversationId = selectedOrderId ? orderConversationId(selectedOrderId) : "";
   const selectedConversation = useConversation(selectedConversationId);

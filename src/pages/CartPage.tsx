@@ -2,6 +2,7 @@ import { CreditCard, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { EmptyState } from "../components/LoadingState";
 import { useCartContext } from "../context/CartContext";
+import { rememberPendingCheckoutOrder } from "../lib/checkoutSession";
 import { formatCurrency, formatRobux } from "../lib/format";
 import { createCheckoutPreference } from "../services/catalog";
 
@@ -17,6 +18,7 @@ export function CartPage() {
 
     try {
       const response = await createCheckoutPreference({ productId, robloxUsername, couponCode });
+      rememberPendingCheckoutOrder(response.data.orderId);
       window.location.href = response.data.initPoint;
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Não foi possível abrir o checkout.");

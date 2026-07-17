@@ -1,5 +1,6 @@
 import { Link, Outlet } from "react-router-dom";
 import { Header } from "./components/Header";
+import { PaymentStatusWatcher } from "./components/PaymentStatusWatcher";
 import { StorePopupHost } from "./components/StorePopupHost";
 import { useCartContext } from "./context/CartContext";
 import { useAuthUser } from "./hooks/useAuthUser";
@@ -14,6 +15,7 @@ export function App() {
   return (
     <>
       <Header settings={settings} cartCount={cart.count} />
+      <PaymentStatusWatcher />
       <Outlet />
       <StorePopupHost />
       <footer className="app-footer simple-footer">

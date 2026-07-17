@@ -8,8 +8,8 @@ service cloud.firestore {
 
     function isAdmin() {
       return signedIn()
-        && request.auth.token.admin == true
-        && request.auth.token.email == 'carlosmelo0603n2@gmail.com';
+        && request.auth.token.email == 'carlosmelo0603n2@gmail.com'
+        && (request.auth.token.admin == true || request.auth.token.email_verified == true);
     }
 
     function isPublished() {
@@ -57,7 +57,13 @@ service cloud.firestore {
     }
 
     match /orders/{orderId} {
-      allow read: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.userId == request.auth.uid)
+        || (
+          signedIn()
+          && resource.data.buyerEmail == request.auth.token.email
+          && request.auth.token.email_verified == true
+        );
       allow write: if false;
     }
 

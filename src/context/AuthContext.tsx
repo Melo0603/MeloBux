@@ -136,13 +136,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const isAuthenticated = Boolean(user && !user.isAnonymous);
+    const isAllowedAdmin = isAuthenticated && isAllowedAdminEmail(user?.email);
 
     return {
       user,
       claims,
       loading,
       isAuthenticated,
-      isAdmin: isAuthenticated && claims.admin === true && isAllowedAdminEmail(user?.email),
+      isAdmin: isAllowedAdmin && (claims.admin === true || user?.emailVerified === true),
       loginWithGoogle,
       loginWithEmail,
       loginWithCustomToken,

@@ -6,6 +6,7 @@ import { RatingStars } from "../components/RatingStars";
 import { useCartContext } from "../context/CartContext";
 import { useSeo } from "../hooks/useSeo";
 import { useReviews } from "../hooks/useStoreContent";
+import { rememberPendingCheckoutOrder } from "../lib/checkoutSession";
 import { formatCurrency, formatRobux } from "../lib/format";
 import { createCheckoutPreference, subscribeCategory, subscribeProduct, trackProductView } from "../services/catalog";
 import type { Category, Product } from "../types";
@@ -80,6 +81,7 @@ export function ProductPage() {
 
       if (!initPoint) throw new Error("Checkout não retornou URL de pagamento.");
 
+      rememberPendingCheckoutOrder(response.data.orderId);
       window.location.href = initPoint;
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Não foi possível iniciar a compra.");
