@@ -1498,6 +1498,20 @@ function getHeaderValue(value: string | undefined) {
   return value ?? "";
 }
 
+function normalizeMercadoPagoSignatureDataId(dataId: string) {
+  return dataId.toLowerCase();
+}
+
+function getMercadoPagoEventType(query: Record<string, string | undefined>, body: Record<string, unknown>) {
+  return (
+    (typeof query.type === "string" && query.type) ||
+    (typeof query.topic === "string" && query.topic) ||
+    (typeof body.type === "string" && body.type) ||
+    (typeof body.topic === "string" && body.topic) ||
+    ""
+  );
+}
+
 function verifyMercadoPagoSignature(options: {
   xSignature: string;
   xRequestId: string;
@@ -1514,9 +1528,14 @@ function verifyMercadoPagoSignature(options: {
   const ts = parts.ts;
   const v1 = parts.v1;
 
-  if (!ts || !v1 || !options.xRequestId || !options.dataId) return false;
+  if (!ts || !v1) return false;
 
-  const manifest = `id:${options.dataId};request-id:${options.xRequestId};ts:${ts};`;
+  const signatureDataId = normalizeMercadoPagoSignatureDataId(options.dataId);
+  const manifest = [
+    signatureDataId ? `id:${signatureDataId};` : "",
+    options.xRequestId ? `request-id:${options.xRequestId};` : "",
+    `ts:${ts};`
+  ].join("");
   const expected = createHmac("sha256", options.secret).update(manifest).digest("hex");
   const expectedBuffer = Buffer.from(expected);
   const receivedBuffer = Buffer.from(v1);
@@ -1528,17 +1547,30 @@ function verifyMercadoPagoSignature(options: {
 }
 
 async function fetchMercadoPagoPayment(paymentId: string, accessToken: string) {
+  console.log("[MercadoPago webhook] Fetching Mercado Pago payment", { paymentId });
   const response = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
     headers: {
       Authorization: `Bearer ${accessToken}`
     }
   });
 
+  console.log("[MercadoPago webhook] Mercado Pago payment API status", {
+    paymentId,
+    status: response.status,
+    ok: response.ok
+  });
+
   if (!response.ok) {
+    console.error("[MercadoPago webhook] Mercado Pago payment fetch failed", {
+      paymentId,
+      status: response.status
+    });
     throw new Error(`Mercado Pago payment fetch failed: ${response.status}`);
   }
 
-  return (await response.json()) as Record<string, unknown>;
+  const payment = (await response.json()) as Record<string, unknown>;
+  console.log("[MercadoPago webhook] Mercado Pago payment API response", payment);
+  return payment;
 }
 
 export async function processMercadoPagoWebhook(event: HandlerEvent) {
@@ -1554,23 +1586,44 @@ export async function processMercadoPagoWebhook(event: HandlerEvent) {
       : typeof (body.data as Record<string, unknown> | undefined)?.id === "string"
         ? String((body.data as Record<string, unknown>).id)
         : "";
+  const eventType = getMercadoPagoEventType(query, body);
+  console.log("[MercadoPago webhook] Extracted payment data", {
+    dataId,
+    eventType
+  });
+
+  if (eventType !== "payment") {
+    console.log("[MercadoPago webhook] Ignored non-payment webhook event before HMAC validation", {
+      dataId,
+      eventType
+    });
+    return { ok: true, ignored: true };
+  }
+
   const xSignature = getHeaderValue(event.headers["x-signature"] ?? event.headers["X-Signature"]);
   const xRequestId = getHeaderValue(event.headers["x-request-id"] ?? event.headers["X-Request-Id"]);
   const secret = requiredEnv("MERCADO_PAGO_WEBHOOK_SECRET");
+  const signatureValid = verifyMercadoPagoSignature({
+    xSignature,
+    xRequestId,
+    dataId,
+    secret
+  });
+  console.log("[MercadoPago webhook] Signature validation result", {
+    dataId,
+    xRequestId,
+    valid: signatureValid
+  });
 
-  if (
-    !verifyMercadoPagoSignature({
-      xSignature,
-      xRequestId,
-      dataId,
-      secret
-    })
-  ) {
+  if (!signatureValid) {
     throw new ApiError(401, "permission-denied", "Invalid signature");
   }
 
-  const eventType = body.type ?? body.topic;
-  if (eventType !== "payment" || !dataId) {
+  if (!dataId) {
+    console.log("[MercadoPago webhook] Ignored webhook event", {
+      dataId,
+      eventType
+    });
     return { ok: true, ignored: true };
   }
 
@@ -1583,6 +1636,11 @@ export async function processMercadoPagoWebhook(event: HandlerEvent) {
         : "";
 
   if (!orderId) {
+    console.log("[MercadoPago webhook] Payment without order reference, ignoring", {
+      dataId,
+      paymentStatus: payment.status,
+      metadata: payment.metadata
+    });
     return { ok: true, ignored: true };
   }
 
@@ -1595,6 +1653,25 @@ export async function processMercadoPagoWebhook(event: HandlerEvent) {
           ? "cancelled"
           : "payment_pending";
 
+  console.log("[MercadoPago webhook] Mapped payment status", {
+    dataId,
+    orderId,
+    mercadoPagoStatus: payment.status,
+    mappedStatus
+  });
+
+  console.log("[MercadoPago webhook] Updating Firestore order", {
+    orderPath: `orders/${orderId}`,
+    changes: {
+      status: mappedStatus,
+      mercadoPagoPaymentId: dataId,
+      mercadoPagoStatus: payment.status ?? null,
+      mercadoPagoStatusDetail: payment.status_detail ?? null,
+      paidAt: payment.status === "approved" ? "Timestamp.now()" : null,
+      updatedAt: "FieldValue.serverTimestamp()"
+    }
+  });
+
   await db.doc(`orders/${orderId}`).set(
     {
       status: mappedStatus,
@@ -1606,11 +1683,28 @@ export async function processMercadoPagoWebhook(event: HandlerEvent) {
     },
     { merge: true }
   );
+  console.log("[MercadoPago webhook] Firestore order update completed", {
+    orderPath: `orders/${orderId}`
+  });
 
   if (mappedStatus === "paid") {
     const orderSnapshot = await db.doc(`orders/${orderId}`).get();
     const order = orderSnapshot.data();
+    console.log("[MercadoPago webhook] Firestore order located", {
+      orderPath: `orders/${orderId}`,
+      exists: orderSnapshot.exists,
+      order
+    });
     if (order?.couponCode && order?.userId) {
+      console.log("[MercadoPago webhook] Updating Firestore coupon usage", {
+        couponPath: `coupons/${order.couponCode}`,
+        couponUsagePath: `couponUsages/${order.couponCode}_${order.userId}`,
+        changes: {
+          couponUsedCount: "+1",
+          couponUpdatedAt: "FieldValue.serverTimestamp()",
+          couponUsageOrderId: orderId
+        }
+      });
       await db.doc(`coupons/${order.couponCode}`).set(
         {
           usedCount: FieldValue.increment(1),
@@ -1627,8 +1721,20 @@ export async function processMercadoPagoWebhook(event: HandlerEvent) {
         },
         { merge: true }
       );
+      console.log("[MercadoPago webhook] Firestore coupon usage update completed", {
+        couponPath: `coupons/${order.couponCode}`,
+        couponUsagePath: `couponUsages/${order.couponCode}_${order.userId}`
+      });
     }
     if (order?.productId) {
+      console.log("[MercadoPago webhook] Updating Firestore product counters", {
+        productPath: `products/${order.productId}`,
+        changes: {
+          soldCount: "+1",
+          stock: "-1",
+          updatedAt: "FieldValue.serverTimestamp()"
+        }
+      });
       await db.doc(`products/${order.productId}`).set(
         {
           soldCount: FieldValue.increment(1),
@@ -1637,9 +1743,19 @@ export async function processMercadoPagoWebhook(event: HandlerEvent) {
         },
         { merge: true }
       );
+      console.log("[MercadoPago webhook] Firestore product counters update completed", {
+        productPath: `products/${order.productId}`
+      });
     }
+    console.log("[MercadoPago webhook] Creating paid order notification", { orderId });
     await notifyOrderPaid(orderId);
+    console.log("[MercadoPago webhook] Paid order notification completed", { orderId });
   }
 
+  console.log("[MercadoPago webhook] Processing completed", {
+    dataId,
+    orderId,
+    mappedStatus
+  });
   return { ok: true };
 }
