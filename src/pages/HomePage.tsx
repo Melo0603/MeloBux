@@ -19,7 +19,7 @@ export function HomePage() {
 
   useSeo({
     title: `${settings.storeName} | Comprar Robux mais barato`,
-    description: "Compre Robux e Gamepass com entrega acompanhada, cupom no checkout e avaliação real após pedido entregue.",
+    description: "Compre Robux e Gamepass com entrega acompanhada, cupom no checkout e avaliacao real apos pedido entregue.",
     image: mascotImage
   });
 
@@ -28,23 +28,20 @@ export function HomePage() {
       <section className="hero-banner" aria-label="MeloBux">
         <span className="hero-blob hero-blob-one" aria-hidden />
         <span className="hero-blob hero-blob-two" aria-hidden />
-        <span className="hero-sparkle hero-sparkle-one" aria-hidden>✦</span>
-        <span className="hero-sparkle hero-sparkle-two" aria-hidden>✦</span>
-
         <div className="hero-copy">
-          <p className="eyebrow">MeloBux</p>
+          <p className="eyebrow">MeloBux Store</p>
           <h1>
-            Comprar Robux
-            <span> mais barato</span>
+            Robux com cara de
+            <span> plataforma premium</span>
           </h1>
           <p className="hero-subtitle">
-            Entrega rápida, compra segura e atendimento direto para receber seus Robux sem enrolação.
+            Compre Robux e Gamepass com checkout seguro, entrega acompanhada e avaliacao liberada somente apos a entrega.
           </p>
 
           <div className="hero-badges" aria-label="Destaques">
             <span>
               <Zap size={18} aria-hidden />
-              Entrega rápida
+              Entrega rapida
             </span>
             <span>
               <ShieldCheck size={18} aria-hidden />
@@ -83,7 +80,7 @@ export function HomePage() {
       <section className="home-section category-section" aria-labelledby="home-categories-title">
         <div className="center-heading">
           <Sparkles size={20} aria-hidden />
-          <h2 id="home-categories-title">Escolha o que você quer comprar</h2>
+          <h2 id="home-categories-title">Escolha seu produto</h2>
           <Sparkles size={20} aria-hidden />
         </div>
         <div className="home-grid">
@@ -101,19 +98,19 @@ export function HomePage() {
         </div>
         <div className="guide-grid">
           <article>
-            <span>1</span>
-            <h3>Escolha o produto</h3>
+            <span>01</span>
+            <h3>Escolha o item</h3>
             <p>Entre em Gamepass ou Robux na Conta e selecione a quantidade desejada.</p>
           </article>
           <article>
-            <span>2</span>
+            <span>02</span>
             <h3>Informe seu Roblox</h3>
-            <p>Digite seu usuário corretamente. A MeloBux nunca pede sua senha.</p>
+            <p>Digite o usuario corretamente. A MeloBux nunca pede sua senha.</p>
           </article>
           <article>
-            <span>3</span>
+            <span>03</span>
             <h3>Acompanhe a entrega</h3>
-            <p>Quando o admin finalizar o pedido, a opção de avaliar fica disponível.</p>
+            <p>Quando o pedido for entregue, a avaliacao real fica disponivel para voce.</p>
           </article>
         </div>
       </section>
@@ -122,7 +119,7 @@ export function HomePage() {
         <div className="section-heading">
           <div>
             <p className="eyebrow">Cupons</p>
-            <h2 id="home-coupons-title">Use no checkout</h2>
+            <h2 id="home-coupons-title">Descontos ativos</h2>
           </div>
         </div>
         {coupons.length ? (
@@ -131,7 +128,7 @@ export function HomePage() {
               <article className="coupon-card" key={coupon.id}>
                 <strong>{coupon.code}</strong>
                 <span>{couponLabel(coupon.type, coupon.value)}</span>
-                {coupon.minOrderValue ? <small>Pedido mínimo de R$ {coupon.minOrderValue.toFixed(2).replace(".", ",")}</small> : null}
+                {coupon.minOrderValue ? <small>Pedido minimo de R$ {coupon.minOrderValue.toFixed(2).replace(".", ",")}</small> : null}
               </article>
             ))}
           </div>
@@ -143,8 +140,8 @@ export function HomePage() {
       <section id="avaliacoes" className="home-section reviews-band" aria-labelledby="home-reviews-title">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">Avaliações</p>
-            <h2 id="home-reviews-title">O que clientes reais estão dizendo</h2>
+            <p className="eyebrow">Avaliacoes</p>
+            <h2 id="home-reviews-title">Clientes reais</h2>
           </div>
         </div>
         {reviews.length ? (
@@ -159,7 +156,7 @@ export function HomePage() {
           </div>
         ) : (
           <p className="empty-copy">
-            As avaliações de clientes aparecerão aqui após pedidos entregues e avaliados.
+            As avaliacoes de clientes aparecerao aqui apos pedidos entregues e avaliados.
           </p>
         )}
       </section>
