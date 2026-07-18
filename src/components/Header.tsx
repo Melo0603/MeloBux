@@ -18,7 +18,7 @@ import {
   X,
   type LucideIcon
 } from "lucide-react";
-import { FormEvent, useState } from "react";
+import { FormEvent, useCallback, useMemo, useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useAuthUser } from "../hooks/useAuthUser";
 import { useThemeMode } from "../hooks/useThemeMode";
@@ -47,21 +47,24 @@ export function Header({ settings, cartCount }: HeaderProps) {
   const tiktokUrl = settings.tiktokUrl || "https://www.tiktok.com/@carloss0603";
   const userName = user?.displayName || user?.email?.split("@")[0] || "Usuario";
   const userInitial = userName.slice(0, 1).toUpperCase();
-  const closeDrawer = () => setDrawerOpen(false);
+  const closeDrawer = useCallback(() => setDrawerOpen(false), []);
 
-  const drawerItems: DrawerItem[] = [
-    { to: "/", label: "Inicio", icon: Home },
-    { to: "/categoria/gamepass", label: "Gamepass", icon: Gamepad2 },
-    { to: "/categoria/robux-na-conta", label: "Robux", icon: Gem },
-    { to: "/carrinho", label: "Carrinho", icon: ShoppingCart },
-    { to: "/compras", label: "Suas compras", icon: Package, auth: true },
-    { to: "/suporte", label: "Suporte", icon: Headphones, auth: true },
-    { to: "/#cupons", label: "Cupons", icon: Ticket },
-    { to: "/#avaliacoes", label: "Avaliacoes", icon: Sparkles },
-    { to: tiktokUrl, label: "TikTok Melo", icon: Music2, external: true }
-  ];
+  const drawerItems: DrawerItem[] = useMemo(
+    () => [
+      { to: "/", label: "Inicio", icon: Home },
+      { to: "/categoria/gamepass", label: "Gamepass", icon: Gamepad2 },
+      { to: "/categoria/robux-na-conta", label: "Robux", icon: Gem },
+      { to: "/carrinho", label: "Carrinho", icon: ShoppingCart },
+      { to: "/compras", label: "Suas compras", icon: Package, auth: true },
+      { to: "/suporte", label: "Suporte", icon: Headphones, auth: true },
+      { to: "/#cupons", label: "Cupons", icon: Ticket },
+      { to: "/#avaliacoes", label: "Avaliacoes", icon: Sparkles },
+      { to: tiktokUrl, label: "TikTok Melo", icon: Music2, external: true }
+    ],
+    [tiktokUrl]
+  );
 
-  function submitSearch(event: FormEvent<HTMLFormElement>) {
+  const submitSearch = useCallback((event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const term = search.trim().toLowerCase();
     if (!term) return;
@@ -74,7 +77,7 @@ export function Header({ settings, cartCount }: HeaderProps) {
     else navigate("/categoria/gamepass");
 
     setSearch("");
-  }
+  }, [isAuthenticated, navigate, search]);
 
   return (
     <header className="app-header">

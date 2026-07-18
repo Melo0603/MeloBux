@@ -1,4 +1,5 @@
 import { Music2, ShieldCheck, ShoppingBag, Sparkles, Ticket, Zap } from "lucide-react";
+import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { CategoryCard } from "../components/CategoryCard";
 import { RatingStars } from "../components/RatingStars";
@@ -10,10 +11,12 @@ function couponLabel(type: string, value: number) {
 }
 
 export function HomePage() {
-  const categories = useCategories(false).slice(0, 2);
+  const allCategories = useCategories(false);
   const settings = useSettings();
   const reviews = useReviews(false);
-  const coupons = useCoupons().filter((coupon) => coupon.status === "active").slice(0, 3);
+  const allCoupons = useCoupons();
+  const categories = useMemo(() => allCategories.slice(0, 2), [allCategories]);
+  const coupons = useMemo(() => allCoupons.filter((coupon) => coupon.status === "active").slice(0, 3), [allCoupons]);
   const mascotImage = settings.homeBannerImageUrl || settings.ownerAvatarUrl || "/assets/melo-hero-drawing.png";
   const tiktokUrl = settings.tiktokUrl || "https://www.tiktok.com/@carloss0603";
 

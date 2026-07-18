@@ -1,10 +1,10 @@
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 
-export function EmptyState({ children }: { children: ReactNode }) {
+export const EmptyState = memo(function EmptyState({ children }: { children: ReactNode }) {
   return <div className="empty-state">{children}</div>;
-}
+});
 
-export function PageSkeleton() {
+export const PageSkeleton = memo(function PageSkeleton() {
   return (
     <main className="content-shell" aria-label="Carregando">
       <div className="skeleton-block">
@@ -14,4 +14,4 @@ export function PageSkeleton() {
       </div>
     </main>
   );
-}
+});
