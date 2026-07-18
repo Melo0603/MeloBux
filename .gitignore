@@ -12,5 +12,7 @@ ui-debug.log
 *.local
 *.tsbuildinfo
 
-# Local Netlify folder
-.netlify
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example

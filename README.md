@@ -1,18 +1,17 @@
 # MeloBux
 
-Marketplace MeloBux em React + Vite usando Firebase Spark para frontend, Auth, Firestore, Storage, Analytics e App Check nos servicos Firebase. Toda logica sensivel foi migrada para Netlify Functions Free.
+Marketplace MeloBux em React + Vite usando Firebase para Auth, Firestore, Storage, Analytics e App Check nos servicos Firebase. A logica sensivel roda no Cloudflare Workers.
 
 ## Arquitetura
 
 - Frontend: React + Vite.
-- Hospedagem atual: Firebase Hosting.
-- Backend sensivel: Netlify Functions em `netlify/functions`.
+- Hospedagem e API: Cloudflare Workers + Cloudflare Assets.
 - Login: Firebase Authentication.
 - Dados: Firestore.
 - Imagens: Firebase Storage.
 - Analytics: Firebase Analytics.
 - App Check: mantido para os servicos Firebase no frontend.
-- Pagamento: Mercado Pago Checkout Pro criado somente no backend Netlify.
+- Pagamento: Mercado Pago Checkout Pro criado somente no Worker.
 
 O Access Token do Mercado Pago e a service account do Firebase nunca ficam no frontend.
 
@@ -20,12 +19,12 @@ O Access Token do Mercado Pago e a service account do Firebase nunca ficam no fr
 
 ```txt
 src/                 Frontend React
+worker/              Backend Cloudflare Workers
 public/              Assets publicos
-netlify/functions/   Backend serverless Netlify
 firestore.rules      Regras Firestore
 storage.rules        Regras Storage
-firebase.json        Hosting, Firestore e Storage
-netlify.toml         Build e Netlify Functions
+firebase.json        Firestore, Storage e Hosting legado
+wrangler.jsonc       Configuracao Cloudflare Workers
 ```
 
 ## Rodar Localmente
@@ -35,14 +34,11 @@ npm install
 npm run dev
 ```
 
-Para testar as Netlify Functions localmente, use Netlify CLI:
+Para testar o build no runtime do Cloudflare:
 
 ```bash
-npm install -g netlify-cli
-netlify dev
+npm run preview
 ```
-
-O `netlify dev` simula `/.netlify/functions/*` e roda o Vite junto com as functions.
 
 ## Variaveis do Frontend
 
@@ -59,79 +55,53 @@ VITE_FIREBASE_MEASUREMENT_ID=
 VITE_FIREBASE_APP_CHECK_SITE_KEY=
 VITE_FIREBASE_APP_CHECK_DEBUG_TOKEN=
 VITE_FIREBASE_VAPID_KEY=
-VITE_NETLIFY_FUNCTIONS_BASE_URL=
+VITE_API_BASE_URL=
 VITE_USE_FIREBASE_EMULATORS=false
 ```
 
-`VITE_NETLIFY_FUNCTIONS_BASE_URL` deve ficar vazio quando o site roda na propria Netlify ou em `netlify dev`. Se o frontend continuar no Firebase Hosting, preencha com a URL do site Netlify que hospeda as functions, por exemplo:
+`VITE_API_BASE_URL` pode ficar vazio quando o frontend e a API rodam no mesmo Worker. Preencha apenas se a API estiver em outro dominio, por exemplo:
 
 ```env
-VITE_NETLIFY_FUNCTIONS_BASE_URL=https://melobux-backend.netlify.app
+VITE_API_BASE_URL=https://api.seudominio.com
 ```
 
-## Variaveis da Netlify
+## Secrets do Cloudflare Workers
 
-Configure no painel da Netlify em:
+Configure com Wrangler:
 
-Site settings > Environment variables
-
-Obrigatorias:
-
-```env
-MERCADO_PAGO_ACCESS_TOKEN=
-MERCADO_PAGO_WEBHOOK_SECRET=
-FIREBASE_PROJECT_ID=
-FIREBASE_CLIENT_EMAIL=
-FIREBASE_PRIVATE_KEY=
+```bash
+wrangler secret put MERCADO_PAGO_ACCESS_TOKEN
+wrangler secret put MERCADO_PAGO_WEBHOOK_SECRET
+wrangler secret put FIREBASE_PROJECT_ID
+wrangler secret put FIREBASE_CLIENT_EMAIL
+wrangler secret put FIREBASE_PRIVATE_KEY
 ```
 
 Recomendadas:
 
-```env
-PUBLIC_SITE_URL=https://melobux.web.app
-NETLIFY_FUNCTIONS_BASE_URL=https://seu-site.netlify.app
-ALLOWED_ORIGINS=https://melobux.web.app,https://melobux.firebaseapp.com,http://localhost:5173,http://localhost:8888
-AUTH_CODE_SECRET=
-SMTP_HOST=
-SMTP_PORT=587
-SMTP_SECURE=false
-SMTP_USER=
-SMTP_PASS=
-SMTP_FROM=
-```
-
-`FIREBASE_PRIVATE_KEY` deve ser a chave privada da service account. Na Netlify, mantenha as quebras de linha como `\n` se colar em uma linha unica.
-
-`AUTH_CODE_SECRET` deve ser uma string longa e privada para assinar os codigos de login por e-mail e redefinicao de senha. As variaveis `SMTP_*` sao usadas para enviar esses codigos por e-mail. Sem SMTP configurado, o login Google e e-mail/senha continuam funcionando, mas a opcao "Entrar com codigo" nao consegue entregar o codigo.
-
-## Firebase
-
-Continue usando Firebase no plano Spark para:
-
-- Authentication
-- Firestore
-- Storage
-- Hosting
-- Analytics
-- App Check
-
-Deploy do Firebase agora publica somente Hosting, Firestore e Storage:
-
 ```bash
-npm run build
-firebase deploy --only hosting,firestore,storage
+wrangler secret put PUBLIC_SITE_URL
+wrangler secret put WORKER_PUBLIC_URL
+wrangler secret put ALLOWED_ORIGINS
+wrangler secret put AUTH_CODE_SECRET
+wrangler secret put SMTP_HOST
+wrangler secret put SMTP_PORT
+wrangler secret put SMTP_SECURE
+wrangler secret put SMTP_USER
+wrangler secret put SMTP_PASS
+wrangler secret put SMTP_FROM
 ```
 
-O script `npm run deploy` ja usa esse alvo.
+`FIREBASE_PRIVATE_KEY` deve ser a chave privada da service account. Mantenha as quebras de linha como `\n` se colar em uma linha unica.
 
-## Netlify Functions
+`AUTH_CODE_SECRET` deve ser uma string longa e privada para assinar os codigos de login por e-mail e redefinicao de senha. As variaveis `SMTP_*` sao usadas para enviar esses codigos por e-mail.
 
-Endpoints criados:
+## Endpoints Worker
 
-- `/.netlify/functions/checkout`
-- `/.netlify/functions/webhook`
-- `/.netlify/functions/admin`
-- `/.netlify/functions/auth`
+- `POST /api/checkout`
+- `POST /api/admin`
+- `POST /api/auth`
+- `POST /api/webhook/mercadopago`
 
 O frontend chama esses endpoints com `fetch`. Quando o usuario esta logado, o Firebase ID Token e enviado no header:
 
@@ -139,24 +109,22 @@ O frontend chama esses endpoints com `fetch`. Quando o usuario esta logado, o Fi
 Authorization: Bearer <firebase-id-token>
 ```
 
-As Netlify Functions validam o token com Firebase Admin SDK antes de qualquer acao sensivel.
-
-O painel administrativo e exclusivo para `carlosmelo0603n2@gmail.com`. Mesmo que outro usuario tente acessar `/admin`, o frontend bloqueia a tela e o backend tambem valida o e-mail antes de permitir qualquer acao administrativa.
+O Worker valida o token com Firebase Admin SDK antes de qualquer acao sensivel.
 
 ## Mercado Pago
 
 No Mercado Pago:
 
 1. Copie o Access Token de producao.
-2. Configure `MERCADO_PAGO_ACCESS_TOKEN` na Netlify.
+2. Configure `MERCADO_PAGO_ACCESS_TOKEN` no Cloudflare Workers.
 3. Configure o webhook para:
 
 ```txt
-https://seu-site.netlify.app/.netlify/functions/webhook
+https://seu-dominio.com/api/webhook/mercadopago
 ```
 
 4. Copie a assinatura secreta do webhook.
-5. Configure `MERCADO_PAGO_WEBHOOK_SECRET` na Netlify.
+5. Configure `MERCADO_PAGO_WEBHOOK_SECRET` no Cloudflare Workers.
 
 O checkout recalcula preco e cupom no backend, cria o pedido no Firestore e so entao cria a preferencia Mercado Pago.
 
@@ -167,7 +135,7 @@ No Firebase Console:
 1. Project settings.
 2. Service accounts.
 3. Generate new private key.
-4. Use estes campos no painel da Netlify:
+4. Use estes campos como secrets no Cloudflare Workers:
 
 ```txt
 FIREBASE_PROJECT_ID      project_id
@@ -181,14 +149,14 @@ Nunca coloque service account, token Mercado Pago ou webhook secret em variaveis
 
 App Check continua valido para proteger os servicos Firebase chamados diretamente pelo frontend, como Firestore e Storage.
 
-As Netlify Functions nao usam `enforceAppCheck`, porque isso era especifico de Firebase Cloud Functions. A protecao das functions agora vem de:
+O Worker protege a API com:
 
 - Firebase ID Token validado no backend.
 - Recalculo de preco no backend.
 - Validacao de cupom no backend.
 - Webhook Mercado Pago assinado.
 - Firestore Rules bloqueando escrita direta.
-- Secrets somente na Netlify.
+- Secrets somente no Cloudflare Workers.
 
 ## Comandos
 
@@ -196,12 +164,13 @@ As Netlify Functions nao usam `enforceAppCheck`, porque isso era especifico de F
 npm run dev
 npm run lint
 npm run build
+npm run preview
 npm run deploy
 ```
 
 ## Backup Firestore
 
-Sem Cloud Functions, faca backup pelo Google Cloud/Firebase Console ou pela CLI do Google Cloud quando o recurso estiver disponivel no seu projeto:
+Faca backup pelo Google Cloud/Firebase Console ou pela CLI do Google Cloud quando o recurso estiver disponivel no seu projeto:
 
 ```bash
 gcloud firestore export gs://SEU_BUCKET/backups/firestore
@@ -214,7 +183,7 @@ gcloud firestore import gs://SEU_BUCKET/backups/firestore
 - Firestore Rules publicadas.
 - Storage Rules publicadas.
 - App Check configurado para Firestore/Storage.
-- Netlify Functions com variaveis obrigatorias.
-- Mercado Pago webhook apontando para Netlify.
+- Secrets obrigatorios configurados no Cloudflare Workers.
+- Mercado Pago webhook apontando para `/api/webhook/mercadopago`.
 - `PUBLIC_SITE_URL` apontando para o dominio final.
-- `VITE_NETLIFY_FUNCTIONS_BASE_URL` preenchido se o frontend estiver no Firebase Hosting.
+- `WORKER_PUBLIC_URL` apontando para o dominio onde a API roda, se diferente do site.

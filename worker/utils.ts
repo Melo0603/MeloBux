@@ -1,5 +1,4 @@
 import { createHash, createHmac, randomInt, timingSafeEqual } from "node:crypto";
-import type { HandlerEvent, HandlerResponse } from "@netlify/functions";
 import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getAuth, type DecodedIdToken } from "firebase-admin/auth";
 import { FieldValue, Timestamp, getFirestore } from "firebase-admin/firestore";
@@ -14,7 +13,29 @@ import {
   fallbackProducts,
   fallbackReviews,
   fallbackSettings
-} from "../../src/data/defaultContent.js";
+} from "../src/data/defaultContent.js";
+
+export type WorkerEnv = Record<string, string | undefined> & {
+  ASSETS?: {
+    fetch(request: Request): Promise<Response>;
+  };
+};
+
+export type ApiEvent = {
+  httpMethod: string;
+  headers: Record<string, string | undefined>;
+  queryStringParameters: Record<string, string | undefined>;
+  body: string | null;
+  isBase64Encoded?: boolean;
+  request: Request;
+  env: WorkerEnv;
+};
+
+export type ApiResponse = {
+  statusCode: number;
+  headers?: Record<string, string>;
+  body: string;
+};
 
 type AdminCollection =
   | "banners"
@@ -31,10 +52,25 @@ type AuthContext = {
 };
 
 export type ApiRequest = {
-  event: HandlerEvent;
+  event: ApiEvent;
   data: Record<string, unknown>;
   auth?: AuthContext;
 };
+
+let activeEnv: WorkerEnv = {};
+let dbInstance: ReturnType<typeof getFirestore> | undefined;
+let authInstance: ReturnType<typeof getAuth> | undefined;
+let messagingInstance: ReturnType<typeof getMessaging> | undefined;
+
+export async function withRuntimeEnv<T>(env: WorkerEnv, callback: () => Promise<T>) {
+  const previousEnv = activeEnv;
+  activeEnv = env;
+  try {
+    return await callback();
+  } finally {
+    activeEnv = previousEnv;
+  }
+}
 
 export class ApiError extends Error {
   statusCode: number;
@@ -83,8 +119,12 @@ const orderStatuses = new Set([
   "payment_rejected"
 ]);
 
+function envValue(name: string) {
+  return activeEnv[name] || process.env[name];
+}
+
 function requiredEnv(name: string) {
-  const value = process.env[name];
+  const value = envValue(name);
   if (!value) throw new ApiError(500, "failed-precondition", `${name} nao configurado.`);
   return value;
 }
@@ -105,11 +145,37 @@ function initializeFirebaseAdmin() {
   });
 }
 
-initializeFirebaseAdmin();
+function ensureFirebaseAdmin() {
+  initializeFirebaseAdmin();
+  dbInstance ??= getFirestore();
+  authInstance ??= getAuth();
+  messagingInstance ??= getMessaging();
+}
 
-export const db = getFirestore();
-export const auth = getAuth();
-export const messaging = getMessaging();
+function lazyClient<T extends object>(getClient: () => T) {
+  return new Proxy({} as T, {
+    get(_target, property) {
+      const client = getClient();
+      const value = Reflect.get(client, property);
+      return typeof value === "function" ? value.bind(client) : value;
+    }
+  });
+}
+
+export const db = lazyClient(() => {
+  ensureFirebaseAdmin();
+  return dbInstance!;
+});
+
+export const auth = lazyClient(() => {
+  ensureFirebaseAdmin();
+  return authInstance!;
+});
+
+export const messaging = lazyClient(() => {
+  ensureFirebaseAdmin();
+  return messagingInstance!;
+});
 
 function allowedOrigins() {
   return [
@@ -117,13 +183,13 @@ function allowedOrigins() {
     "http://localhost:8888",
     "https://melobux.web.app",
     "https://melobux.firebaseapp.com",
-    process.env.URL,
-    process.env.DEPLOY_PRIME_URL,
-    ...(process.env.ALLOWED_ORIGINS?.split(",").map((origin) => origin.trim()).filter(Boolean) ?? [])
+    envValue("PUBLIC_SITE_URL"),
+    envValue("WORKER_PUBLIC_URL"),
+    ...(envValue("ALLOWED_ORIGINS")?.split(",").map((origin) => origin.trim()).filter(Boolean) ?? [])
   ].filter(Boolean) as string[];
 }
 
-export function corsHeaders(event: HandlerEvent) {
+export function corsHeaders(event: ApiEvent) {
   const origin = event.headers.origin ?? event.headers.Origin ?? "";
   const allowed = allowedOrigins();
   const allowOrigin = allowed.includes(origin) ? origin : allowed[0] ?? "*";
@@ -136,7 +202,7 @@ export function corsHeaders(event: HandlerEvent) {
   };
 }
 
-export function jsonResponse(event: HandlerEvent, statusCode: number, body: unknown): HandlerResponse {
+export function jsonResponse(event: ApiEvent, statusCode: number, body: unknown): ApiResponse {
   return {
     statusCode,
     headers: {
@@ -147,7 +213,7 @@ export function jsonResponse(event: HandlerEvent, statusCode: number, body: unkn
   };
 }
 
-export function emptyResponse(event: HandlerEvent): HandlerResponse {
+export function emptyResponse(event: ApiEvent): ApiResponse {
   return {
     statusCode: 204,
     headers: corsHeaders(event),
@@ -155,7 +221,7 @@ export function emptyResponse(event: HandlerEvent): HandlerResponse {
   };
 }
 
-export function handleApiError(event: HandlerEvent, error: unknown): HandlerResponse {
+export function handleApiError(event: ApiEvent, error: unknown): ApiResponse {
   if (error instanceof ApiError) {
     return jsonResponse(event, error.statusCode, {
       error: {
@@ -166,7 +232,7 @@ export function handleApiError(event: HandlerEvent, error: unknown): HandlerResp
   }
 
   const record = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
-  console.error("Netlify Function failed", {
+  console.error("Worker request failed", {
     message: typeof record.message === "string" ? record.message : String(error),
     code: record.code ?? null,
     stack: typeof record.stack === "string" ? record.stack : null,
@@ -182,7 +248,7 @@ export function handleApiError(event: HandlerEvent, error: unknown): HandlerResp
   });
 }
 
-export function parseBody(event: HandlerEvent) {
+export function parseBody(event: ApiEvent) {
   if (!event.body) return {};
 
   try {
@@ -196,7 +262,7 @@ export function parseBody(event: HandlerEvent) {
   }
 }
 
-export async function authenticate(event: HandlerEvent, required = true): Promise<AuthContext | undefined> {
+export async function authenticate(event: ApiEvent, required = true): Promise<AuthContext | undefined> {
   const header = event.headers.authorization ?? event.headers.Authorization ?? "";
   const match = /^Bearer\s+(.+)$/i.exec(header);
 
@@ -278,10 +344,10 @@ function sanitizeCollection(collection: unknown): AdminCollection {
   return collection as AdminCollection;
 }
 
-function clientIp(event: HandlerEvent) {
+function clientIp(event: ApiEvent) {
   const forwarded = event.headers["x-forwarded-for"] ?? event.headers["X-Forwarded-For"];
   if (typeof forwarded === "string") return forwarded.split(",")[0]?.trim() ?? null;
-  return event.headers["client-ip"] ?? null;
+  return event.headers["cf-connecting-ip"] ?? event.headers["client-ip"] ?? null;
 }
 
 function sanitizeText(value: unknown, maxLength = 240, fallback = "") {
@@ -638,7 +704,7 @@ function authCodeDocumentId(email: string, purpose: AuthCodePurpose) {
 }
 
 function authCodeSecret() {
-  return process.env.AUTH_CODE_SECRET || firebasePrivateKey();
+  return envValue("AUTH_CODE_SECRET") || firebasePrivateKey();
 }
 
 function hashAuthCode(email: string, purpose: AuthCodePurpose, code: string) {
@@ -652,22 +718,22 @@ function safeCompare(value: string, expected: string) {
 }
 
 function smtpTransporter() {
-  const host = process.env.SMTP_HOST;
-  const from = process.env.SMTP_FROM || process.env.SMTP_USER;
+  const host = envValue("SMTP_HOST");
+  const from = envValue("SMTP_FROM") || envValue("SMTP_USER");
   if (!host || !from) {
     throw new ApiError(500, "failed-precondition", "SMTP nao configurado para envio de codigos.");
   }
 
-  const port = Number(process.env.SMTP_PORT || 587);
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
+  const port = Number(envValue("SMTP_PORT") || 587);
+  const user = envValue("SMTP_USER");
+  const pass = envValue("SMTP_PASS");
 
   return {
     from,
     transporter: nodemailer.createTransport({
       host,
       port: Number.isFinite(port) ? port : 587,
-      secure: process.env.SMTP_SECURE === "true",
+      secure: envValue("SMTP_SECURE") === "true",
       auth: user && pass ? { user, pass } : undefined
     })
   };
@@ -856,14 +922,15 @@ async function createStoreNotification(options: {
 }
 
 function publicSiteUrl() {
-  return (process.env.PUBLIC_SITE_URL || "https://melobux.web.app").replace(/\/$/, "");
+  return (envValue("PUBLIC_SITE_URL") || "https://melobux.web.app").replace(/\/$/, "");
 }
 
-function functionOrigin(event: HandlerEvent) {
+function functionOrigin(event: ApiEvent) {
   const host = event.headers.host ?? event.headers.Host;
-  const proto = event.headers["x-forwarded-proto"] ?? "https";
+  const requestUrl = new URL(event.request.url);
+  const proto = event.headers["x-forwarded-proto"] ?? requestUrl.protocol.replace(":", "") ?? "https";
   if (host) return `${proto}://${host}`;
-  return (process.env.NETLIFY_FUNCTIONS_BASE_URL || process.env.URL || publicSiteUrl()).replace(/\/$/, "");
+  return (envValue("WORKER_PUBLIC_URL") || publicSiteUrl()).replace(/\/$/, "");
 }
 
 async function notifyUser(
@@ -1986,7 +2053,7 @@ export async function createCheckoutPreference(request: ApiRequest) {
       pending: `${publicSiteUrl()}/pedido/${orderId}?status=pending`
     },
     auto_return: "approved",
-    notification_url: `${functionOrigin(request.event)}/.netlify/functions/webhook`
+    notification_url: `${functionOrigin(request.event)}/api/webhook/mercadopago`
   };
 
   const response = await fetch("https://api.mercadopago.com/checkout/preferences", {
@@ -2119,7 +2186,7 @@ async function fetchMercadoPagoPayment(paymentId: string, accessToken: string) {
   return payment;
 }
 
-export async function processMercadoPagoWebhook(event: HandlerEvent) {
+export async function processMercadoPagoWebhook(event: ApiEvent) {
   if (event.httpMethod !== "POST") {
     throw new ApiError(405, "method-not-allowed", "Method not allowed");
   }

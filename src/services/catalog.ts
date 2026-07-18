@@ -579,11 +579,11 @@ function requireAuthenticatedUser(message = "Faca login para continuar.") {
   return auth.currentUser;
 }
 
-function netlifyFunctionsBaseUrl() {
-  return (import.meta.env.VITE_NETLIFY_FUNCTIONS_BASE_URL || "").replace(/\/$/, "");
+function apiBaseUrl() {
+  return (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 }
 
-async function netlifyRequest<TRequest, TResponse>(
+async function apiRequest<TRequest, TResponse>(
   endpoint: "admin" | "auth" | "checkout",
   payload: TRequest,
   options: { authRequired?: boolean } = {}
@@ -600,7 +600,7 @@ async function netlifyRequest<TRequest, TResponse>(
     headers.Authorization = `Bearer ${await user.getIdToken()}`;
   }
 
-  const response = await fetch(`${netlifyFunctionsBaseUrl()}/.netlify/functions/${endpoint}`, {
+  const response = await fetch(`${apiBaseUrl()}/api/${endpoint}`, {
     method: "POST",
     headers,
     body: JSON.stringify(payload)
@@ -619,7 +619,7 @@ async function netlifyRequest<TRequest, TResponse>(
 }
 
 function authAction<TRequest, TResponse>(action: string, data: TRequest) {
-  return netlifyRequest<{ action: string; data: TRequest }, TResponse>(
+  return apiRequest<{ action: string; data: TRequest }, TResponse>(
     "auth",
     { action, data },
     { authRequired: false }
@@ -631,7 +631,7 @@ function adminAction<TRequest, TResponse>(
   data: TRequest,
   options?: { authRequired?: boolean }
 ) {
-  return netlifyRequest<{ action: string; data: TRequest }, TResponse>(
+  return apiRequest<{ action: string; data: TRequest }, TResponse>(
     "admin",
     { action, data },
     options
@@ -800,7 +800,7 @@ export async function createCheckoutPreference(payload: {
   if (!auth) throw new Error("Firebase Authentication não está configurado.");
   requireAuthenticatedUser("Faca login para comprar.");
 
-  return netlifyRequest<typeof payload, { orderId: string; initPoint: string }>("checkout", payload);
+  return apiRequest<typeof payload, { orderId: string; initPoint: string }>("checkout", payload);
 }
 
 export async function uploadAdminImage(file: File, path: string) {
