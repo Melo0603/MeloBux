@@ -1,9 +1,3 @@
-import { createHash, createHmac, randomInt, timingSafeEqual } from "node:crypto";
-import { cert, getApps, initializeApp } from "firebase-admin/app";
-import { getAuth, type DecodedIdToken } from "firebase-admin/auth";
-import { FieldValue, Timestamp, getFirestore } from "firebase-admin/firestore";
-import { getMessaging } from "firebase-admin/messaging";
-import nodemailer from "nodemailer";
 import {
   fallbackBanners,
   fallbackCategories,
@@ -14,6 +8,21 @@ import {
   fallbackReviews,
   fallbackSettings
 } from "../src/data/defaultContent.js";
+import {
+  FieldValue,
+  Timestamp,
+  auth,
+  constantTimeEqual,
+  db,
+  decodeBase64Utf8,
+  firebasePrivateKeyValue,
+  hmacSha256Hex,
+  messaging,
+  randomSixDigitCode,
+  setFirebaseRuntimeEnv,
+  sha256Hex,
+  type DecodedIdToken
+} from "./firebaseRest";
 
 export type WorkerEnv = Record<string, string | undefined> & {
   ASSETS?: {
@@ -58,17 +67,16 @@ export type ApiRequest = {
 };
 
 let activeEnv: WorkerEnv = {};
-let dbInstance: ReturnType<typeof getFirestore> | undefined;
-let authInstance: ReturnType<typeof getAuth> | undefined;
-let messagingInstance: ReturnType<typeof getMessaging> | undefined;
 
 export async function withRuntimeEnv<T>(env: WorkerEnv, callback: () => Promise<T>) {
   const previousEnv = activeEnv;
   activeEnv = env;
+  setFirebaseRuntimeEnv(env);
   try {
     return await callback();
   } finally {
     activeEnv = previousEnv;
+    setFirebaseRuntimeEnv(previousEnv);
   }
 }
 
@@ -120,7 +128,7 @@ const orderStatuses = new Set([
 ]);
 
 function envValue(name: string) {
-  return activeEnv[name] || process.env[name];
+  return activeEnv[name] || (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.[name];
 }
 
 function requiredEnv(name: string) {
@@ -130,52 +138,8 @@ function requiredEnv(name: string) {
 }
 
 function firebasePrivateKey() {
-  return requiredEnv("FIREBASE_PRIVATE_KEY").replace(/\\n/g, "\n");
+  return firebasePrivateKeyValue();
 }
-
-function initializeFirebaseAdmin() {
-  if (getApps().length > 0) return;
-
-  initializeApp({
-    credential: cert({
-      projectId: requiredEnv("FIREBASE_PROJECT_ID"),
-      clientEmail: requiredEnv("FIREBASE_CLIENT_EMAIL"),
-      privateKey: firebasePrivateKey()
-    })
-  });
-}
-
-function ensureFirebaseAdmin() {
-  initializeFirebaseAdmin();
-  dbInstance ??= getFirestore();
-  authInstance ??= getAuth();
-  messagingInstance ??= getMessaging();
-}
-
-function lazyClient<T extends object>(getClient: () => T) {
-  return new Proxy({} as T, {
-    get(_target, property) {
-      const client = getClient();
-      const value = Reflect.get(client, property);
-      return typeof value === "function" ? value.bind(client) : value;
-    }
-  });
-}
-
-export const db = lazyClient(() => {
-  ensureFirebaseAdmin();
-  return dbInstance!;
-});
-
-export const auth = lazyClient(() => {
-  ensureFirebaseAdmin();
-  return authInstance!;
-});
-
-export const messaging = lazyClient(() => {
-  ensureFirebaseAdmin();
-  return messagingInstance!;
-});
 
 function allowedOrigins() {
   return [
@@ -253,7 +217,7 @@ export function parseBody(event: ApiEvent) {
 
   try {
     const raw = event.isBase64Encoded
-      ? Buffer.from(event.body, "base64").toString("utf8")
+      ? decodeBase64Utf8(event.body)
       : event.body;
     const parsed = JSON.parse(raw);
     return asRecord(parsed);
@@ -699,62 +663,65 @@ function requireEmail(value: unknown) {
   return email;
 }
 
-function authCodeDocumentId(email: string, purpose: AuthCodePurpose) {
-  return createHash("sha256").update(`${purpose}:${email}`).digest("hex");
+async function authCodeDocumentId(email: string, purpose: AuthCodePurpose) {
+  return sha256Hex(`${purpose}:${email}`);
 }
 
 function authCodeSecret() {
   return envValue("AUTH_CODE_SECRET") || firebasePrivateKey();
 }
 
-function hashAuthCode(email: string, purpose: AuthCodePurpose, code: string) {
-  return createHmac("sha256", authCodeSecret()).update(`${purpose}:${email}:${code}`).digest("hex");
+async function hashAuthCode(email: string, purpose: AuthCodePurpose, code: string) {
+  return hmacSha256Hex(authCodeSecret(), `${purpose}:${email}:${code}`);
 }
 
 function safeCompare(value: string, expected: string) {
-  const valueBuffer = Buffer.from(value);
-  const expectedBuffer = Buffer.from(expected);
-  return valueBuffer.length === expectedBuffer.length && timingSafeEqual(valueBuffer, expectedBuffer);
-}
-
-function smtpTransporter() {
-  const host = envValue("SMTP_HOST");
-  const from = envValue("SMTP_FROM") || envValue("SMTP_USER");
-  if (!host || !from) {
-    throw new ApiError(500, "failed-precondition", "SMTP nao configurado para envio de codigos.");
-  }
-
-  const port = Number(envValue("SMTP_PORT") || 587);
-  const user = envValue("SMTP_USER");
-  const pass = envValue("SMTP_PASS");
-
-  return {
-    from,
-    transporter: nodemailer.createTransport({
-      host,
-      port: Number.isFinite(port) ? port : 587,
-      secure: envValue("SMTP_SECURE") === "true",
-      auth: user && pass ? { user, pass } : undefined
-    })
-  };
+  return constantTimeEqual(value, expected);
 }
 
 async function sendAuthCodeEmail(email: string, code: string, purpose: AuthCodePurpose) {
-  const { transporter, from } = smtpTransporter();
+  const from = envValue("EMAIL_FROM");
   const subject = purpose === "password_reset" ? "Codigo para redefinir sua senha" : "Codigo de acesso MeloBux";
   const intro =
     purpose === "password_reset"
       ? "Use este codigo para cadastrar uma nova senha na MeloBux."
       : "Use este codigo para entrar na sua conta MeloBux.";
   const text = `${intro}\n\nCodigo: ${code}\n\nEle expira em 10 minutos.`;
+  const html = `<p>${intro}</p><p style="font-size:28px;font-weight:700;letter-spacing:6px">${code}</p><p>Ele expira em 10 minutos.</p>`;
+  const resendApiKey = envValue("RESEND_API_KEY");
+  const emailEndpoint = envValue("EMAIL_HTTP_ENDPOINT");
+  const emailBearerToken = envValue("EMAIL_HTTP_BEARER_TOKEN");
 
-  await transporter.sendMail({
-    from,
-    to: email,
-    subject,
-    text,
-    html: `<p>${intro}</p><p style="font-size:28px;font-weight:700;letter-spacing:6px">${code}</p><p>Ele expira em 10 minutos.</p>`
-  });
+  if (resendApiKey && from) {
+    const response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${resendApiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ from, to: email, subject, text, html })
+    });
+    if (!response.ok) {
+      throw new ApiError(502, "failed-precondition", `Falha ao enviar codigo por e-mail: ${response.status}`);
+    }
+    return;
+  }
+
+  if (emailEndpoint && from) {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (emailBearerToken) headers.Authorization = `Bearer ${emailBearerToken}`;
+    const response = await fetch(emailEndpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ from, to: email, subject, text, html, purpose })
+    });
+    if (!response.ok) {
+      throw new ApiError(502, "failed-precondition", `Falha ao enviar codigo por e-mail: ${response.status}`);
+    }
+    return;
+  }
+
+  throw new ApiError(500, "failed-precondition", "Servico de e-mail HTTP nao configurado para envio de codigos.");
 }
 
 async function verifyStoredAuthCode(email: string, purpose: AuthCodePurpose, code: string) {
@@ -762,7 +729,7 @@ async function verifyStoredAuthCode(email: string, purpose: AuthCodePurpose, cod
     throw new ApiError(400, "invalid-argument", "Codigo invalido.");
   }
 
-  const ref = db.collection("authCodes").doc(authCodeDocumentId(email, purpose));
+  const ref = db.collection("authCodes").doc(await authCodeDocumentId(email, purpose));
   const snapshot = await ref.get();
   const data = snapshot.data();
 
@@ -773,7 +740,7 @@ async function verifyStoredAuthCode(email: string, purpose: AuthCodePurpose, cod
   const expiresAt = typeof data.expiresAt === "number" ? data.expiresAt : 0;
   const attempts = typeof data.attempts === "number" ? data.attempts : 0;
   const expectedHash = typeof data.codeHash === "string" ? data.codeHash : "";
-  const currentHash = hashAuthCode(email, purpose, code);
+  const currentHash = await hashAuthCode(email, purpose, code);
 
   if (expiresAt < Date.now()) {
     await ref.delete();
@@ -814,7 +781,7 @@ async function getOrCreateAuthUser(email: string) {
 export async function requestAuthCode(request: ApiRequest) {
   const email = requireEmail(request.data.email);
   const purpose = authCodePurpose(request.data.purpose);
-  await enforceRateLimit(authCodeDocumentId(email, purpose), "auth-code", 5, 15 * 60_000);
+  await enforceRateLimit(await authCodeDocumentId(email, purpose), "auth-code", 5, 15 * 60_000);
 
   if (purpose === "password_reset") {
     try {
@@ -824,11 +791,11 @@ export async function requestAuthCode(request: ApiRequest) {
     }
   }
 
-  const code = String(randomInt(100000, 1_000_000));
-  await db.collection("authCodes").doc(authCodeDocumentId(email, purpose)).set({
+  const code = randomSixDigitCode();
+  await db.collection("authCodes").doc(await authCodeDocumentId(email, purpose)).set({
     email,
     purpose,
-    codeHash: hashAuthCode(email, purpose, code),
+    codeHash: await hashAuthCode(email, purpose, code),
     attempts: 0,
     expiresAt: Date.now() + 10 * 60_000,
     createdAt: FieldValue.serverTimestamp(),
@@ -2125,7 +2092,7 @@ function getMercadoPagoEventType(query: Record<string, string | undefined>, body
   );
 }
 
-function verifyMercadoPagoSignature(options: {
+async function verifyMercadoPagoSignature(options: {
   xSignature: string;
   xRequestId: string;
   dataId: string;
@@ -2149,14 +2116,8 @@ function verifyMercadoPagoSignature(options: {
     options.xRequestId ? `request-id:${options.xRequestId};` : "",
     `ts:${ts};`
   ].join("");
-  const expected = createHmac("sha256", options.secret).update(manifest).digest("hex");
-  const expectedBuffer = Buffer.from(expected);
-  const receivedBuffer = Buffer.from(v1);
-
-  return (
-    expectedBuffer.length === receivedBuffer.length &&
-    timingSafeEqual(expectedBuffer, receivedBuffer)
-  );
+  const expected = await hmacSha256Hex(options.secret, manifest);
+  return safeCompare(expected, v1);
 }
 
 async function fetchMercadoPagoPayment(paymentId: string, accessToken: string) {
@@ -2216,7 +2177,7 @@ export async function processMercadoPagoWebhook(event: ApiEvent) {
   const xSignature = getHeaderValue(event.headers["x-signature"] ?? event.headers["X-Signature"]);
   const xRequestId = getHeaderValue(event.headers["x-request-id"] ?? event.headers["X-Request-Id"]);
   const secret = requiredEnv("MERCADO_PAGO_WEBHOOK_SECRET");
-  const signatureValid = verifyMercadoPagoSignature({
+  const signatureValid = await verifyMercadoPagoSignature({
     xSignature,
     xRequestId,
     dataId,

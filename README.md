@@ -65,36 +65,81 @@ VITE_USE_FIREBASE_EMULATORS=false
 VITE_API_BASE_URL=https://api.seudominio.com
 ```
 
-## Secrets do Cloudflare Workers
+## Configuracao do Cloudflare Workers
 
-Configure com Wrangler:
+O Worker nao usa Firebase Admin SDK. Ele acessa Firebase por APIs HTTP compativeis com Cloudflare Workers:
 
-```bash
-wrangler secret put MERCADO_PAGO_ACCESS_TOKEN
-wrangler secret put MERCADO_PAGO_WEBHOOK_SECRET
-wrangler secret put FIREBASE_PROJECT_ID
-wrangler secret put FIREBASE_CLIENT_EMAIL
-wrangler secret put FIREBASE_PRIVATE_KEY
+- Firestore REST API.
+- Firebase Auth por JWT/JWKS e Identity Toolkit REST.
+- Firebase Cloud Messaging HTTP v1.
+- Mercado Pago por HTTPS.
+
+### Vars nao sensiveis
+
+Estas variaveis ficam em `wrangler.jsonc` dentro de `vars`. Troque os valores de exemplo antes do deploy final.
+
+| Variavel | Obrigatoria | Exemplo | Usada em | Motivo |
+| --- | --- | --- | --- | --- |
+| `FIREBASE_PROJECT_ID` | Sim | `melobux-exemplo` | `worker/firebaseRest.ts` | Identifica o projeto Firebase para Firestore, Auth e FCM. |
+| `FIREBASE_DATABASE_ID` | Opcional | `(default)` | `worker/firebaseRest.ts` | Banco Firestore. Se vazio, usa `(default)`. |
+| `FIREBASE_WEB_API_KEY` | Sim para redefinir senha | `AIzaSyEXEMPLO_PUBLICO` | `worker/firebaseRest.ts` | Identity Toolkit REST ao trocar custom token por ID token. Pode ser a mesma `VITE_FIREBASE_API_KEY`. |
+| `PUBLIC_SITE_URL` | Sim em producao | `https://seu-dominio.com` | `worker/utils.ts` | Links de retorno do Mercado Pago e notificacoes. |
+| `WORKER_PUBLIC_URL` | Opcional | `https://seu-dominio.com` | `worker/utils.ts` | Origem publica da API quando diferente do site. |
+| `ALLOWED_ORIGINS` | Opcional | `http://localhost:5173,https://seu-dominio.com` | `worker/utils.ts` | CORS quando frontend e API rodam em dominios diferentes. |
+| `EMAIL_FROM` | Condicional | `MeloBux <noreply@seudominio.com>` | `worker/utils.ts` | Remetente dos codigos por e-mail. Necessaria com Resend ou endpoint HTTP. |
+| `EMAIL_HTTP_ENDPOINT` | Condicional | `https://api.seuprovedor.com/send` | `worker/utils.ts` | Endpoint HTTP alternativo para envio de e-mail. |
+
+### Secrets obrigatorios
+
+Configure estes valores no Cloudflare, nunca em variaveis `VITE_`.
+
+| Secret | Obrigatorio | Exemplo sem dados reais | Usado em | Motivo |
+| --- | --- | --- | --- | --- |
+| `MERCADO_PAGO_ACCESS_TOKEN` | Sim | `APP_USR-xxxxxxxxxxxxxxxx` | `worker/utils.ts` | Criar preferencia de checkout e consultar pagamento no webhook. |
+| `MERCADO_PAGO_WEBHOOK_SECRET` | Sim | `assinatura-secreta-do-webhook` | `worker/utils.ts` | Validar assinatura HMAC dos webhooks de pagamento. |
+| `FIREBASE_CLIENT_EMAIL` | Sim | `firebase-adminsdk-xxxxx@melobux-exemplo.iam.gserviceaccount.com` | `worker/firebaseRest.ts` | Assinar JWT da service account para APIs Google. |
+| `FIREBASE_PRIVATE_KEY` | Sim | `-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n` | `worker/firebaseRest.ts` | Assinar JWT da service account e custom tokens. |
+
+### Secrets opcionais ou condicionais
+
+| Secret | Obrigatorio | Exemplo sem dados reais | Usado em | Motivo |
+| --- | --- | --- | --- | --- |
+| `AUTH_CODE_SECRET` | Recomendado | `string-longa-aleatoria` | `worker/utils.ts` | Assinar hashes dos codigos de login por e-mail. Se ausente, usa a chave privada Firebase como fallback. |
+| `RESEND_API_KEY` | Condicional | `re_xxxxxxxxxxxxx` | `worker/utils.ts` | Enviar codigos por e-mail via Resend. Necessaria se usar Resend. |
+| `EMAIL_HTTP_BEARER_TOKEN` | Opcional | `token-do-provedor-http` | `worker/utils.ts` | Autorizacao do endpoint HTTP alternativo de e-mail. |
+
+Para o login por codigo funcionar em producao, configure uma destas opcoes:
+
+- `RESEND_API_KEY` + `EMAIL_FROM`
+- `EMAIL_HTTP_ENDPOINT` + `EMAIL_FROM` e, se o provedor exigir, `EMAIL_HTTP_BEARER_TOKEN`
+
+Cloudflare Workers nao envia SMTP direto.
+
+### Comandos CMD para cadastrar secrets
+
+Execute um por vez no CMD, dentro da pasta do projeto:
+
+```cmd
+npx wrangler secret put MERCADO_PAGO_ACCESS_TOKEN
+npx wrangler secret put MERCADO_PAGO_WEBHOOK_SECRET
+npx wrangler secret put FIREBASE_CLIENT_EMAIL
+npx wrangler secret put FIREBASE_PRIVATE_KEY
+npx wrangler secret put AUTH_CODE_SECRET
 ```
 
-Recomendadas:
+Se for usar Resend:
 
-```bash
-wrangler secret put PUBLIC_SITE_URL
-wrangler secret put WORKER_PUBLIC_URL
-wrangler secret put ALLOWED_ORIGINS
-wrangler secret put AUTH_CODE_SECRET
-wrangler secret put SMTP_HOST
-wrangler secret put SMTP_PORT
-wrangler secret put SMTP_SECURE
-wrangler secret put SMTP_USER
-wrangler secret put SMTP_PASS
-wrangler secret put SMTP_FROM
+```cmd
+npx wrangler secret put RESEND_API_KEY
+```
+
+Se for usar um provedor HTTP proprio para e-mail:
+
+```cmd
+npx wrangler secret put EMAIL_HTTP_BEARER_TOKEN
 ```
 
 `FIREBASE_PRIVATE_KEY` deve ser a chave privada da service account. Mantenha as quebras de linha como `\n` se colar em uma linha unica.
-
-`AUTH_CODE_SECRET` deve ser uma string longa e privada para assinar os codigos de login por e-mail e redefinicao de senha. As variaveis `SMTP_*` sao usadas para enviar esses codigos por e-mail.
 
 ## Endpoints Worker
 
@@ -109,7 +154,7 @@ O frontend chama esses endpoints com `fetch`. Quando o usuario esta logado, o Fi
 Authorization: Bearer <firebase-id-token>
 ```
 
-O Worker valida o token com Firebase Admin SDK antes de qualquer acao sensivel.
+O Worker valida o token Firebase por assinatura JWT/JWKS, sem SDK administrativo do Firebase, antes de qualquer acao sensivel.
 
 ## Mercado Pago
 
@@ -135,12 +180,12 @@ No Firebase Console:
 1. Project settings.
 2. Service accounts.
 3. Generate new private key.
-4. Use estes campos como secrets no Cloudflare Workers:
+4. Use estes campos no Cloudflare Workers:
 
 ```txt
-FIREBASE_PROJECT_ID      project_id
-FIREBASE_CLIENT_EMAIL    client_email
-FIREBASE_PRIVATE_KEY     private_key
+FIREBASE_PROJECT_ID      project_id    -> var nao sensivel em wrangler.jsonc
+FIREBASE_CLIENT_EMAIL    client_email  -> secret
+FIREBASE_PRIVATE_KEY     private_key   -> secret
 ```
 
 Nunca coloque service account, token Mercado Pago ou webhook secret em variaveis `VITE_`.
@@ -151,7 +196,7 @@ App Check continua valido para proteger os servicos Firebase chamados diretament
 
 O Worker protege a API com:
 
-- Firebase ID Token validado no backend.
+- Firebase ID Token validado no backend por JWT/JWKS.
 - Recalculo de preco no backend.
 - Validacao de cupom no backend.
 - Webhook Mercado Pago assinado.
@@ -183,7 +228,7 @@ gcloud firestore import gs://SEU_BUCKET/backups/firestore
 - Firestore Rules publicadas.
 - Storage Rules publicadas.
 - App Check configurado para Firestore/Storage.
-- Secrets obrigatorios configurados no Cloudflare Workers.
+- Vars e secrets obrigatorios configurados no Cloudflare Workers.
 - Mercado Pago webhook apontando para `/api/webhook/mercadopago`.
 - `PUBLIC_SITE_URL` apontando para o dominio final.
 - `WORKER_PUBLIC_URL` apontando para o dominio onde a API roda, se diferente do site.

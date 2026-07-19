@@ -6,10 +6,17 @@
   "observability": {
     "enabled": true
   },
+  "vars": {
+    "FIREBASE_PROJECT_ID": "melobux-exemplo",
+    "FIREBASE_DATABASE_ID": "(default)",
+    "FIREBASE_WEB_API_KEY": "AIzaSyEXEMPLO_PUBLICO",
+    "PUBLIC_SITE_URL": "https://seu-dominio.com",
+    "WORKER_PUBLIC_URL": "https://seu-dominio.com",
+    "ALLOWED_ORIGINS": "http://localhost:5173,https://seu-dominio.com",
+    "EMAIL_FROM": "MeloBux <noreply@seudominio.com>",
+    "EMAIL_HTTP_ENDPOINT": ""
+  },
   "assets": {
     "not_found_handling": "single-page-application"
-  },
-  "compatibility_flags": [
-    "nodejs_compat"
-  ]
+  }
 }
